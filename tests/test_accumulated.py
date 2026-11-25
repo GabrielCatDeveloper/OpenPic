@@ -69,7 +69,8 @@ def test_a_week_saves_its_result_and_it_accumulates(service):
     # 3 dias x 1000 kcal de ahorro en cada semana.
     assert data["total"] == 6000
     assert data["weeks_counted"] == 2
-    assert data["kg_equivalent"] == pytest.approx(0.78, abs=0.01)
+    # 6.000 kcal con la regla de 7.000 kcal/kg.
+    assert data["kg_equivalent"] == pytest.approx(0.86, abs=0.01)
 
 
 def test_a_week_that_overshoots_subtracts_from_the_total(service):
@@ -123,8 +124,8 @@ def test_closing_a_week_twice_does_not_double_it(service):
 def test_the_goal_is_the_kcal_to_the_target_weight(service):
     svc, db = service
     data = svc.accumulated_savings(USER_ID)
-    # 80 kg actuales - 75 kg objetivo = 5 kg x 7700 kcal.
-    assert data["goal_kcal"] == 5 * 7700
+    # 80 kg actuales - 75 kg objetivo = 5 kg x 7000 kcal.
+    assert data["goal_kcal"] == 5 * 7000
 
 
 def test_without_a_target_weight_there_is_no_goal(service):
@@ -163,3 +164,10 @@ def test_erasing_the_user_removes_the_weekly_savings(service):
     counts = erase_user_data(db, USER_ID)
     assert counts["weekly_savings"] == 1
     assert db.list_week_savings(USER_ID) == []
+
+
+def test_the_fat_equivalence_uses_7000_kcal_per_kg():
+    """La regla del bot: 1 kg de grasa ~ 7.000 kcal."""
+    from foodbot.core.nutrition import KCAL_PER_KG_FAT
+
+    assert KCAL_PER_KG_FAT == 7000.0

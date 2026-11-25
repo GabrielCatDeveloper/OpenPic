@@ -8,7 +8,7 @@ Reglas de seguridad aplicadas:
 - Suelo calorico minimo por sexo (1200 kcal mujer / 1500 kcal hombre / 1400 resto).
 - El deficit semanal nunca supera el 25% del TDEE semanal.
 - La proteina se calcula por kg de peso magra aproximada (peso actual).
-- 7700 kcal ~ 1 kg de grasa corporal.
+- 7.000 kcal ~ 1 kg de grasa (aproximacion; ver KCAL_PER_KG_FAT).
 """
 
 from __future__ import annotations
@@ -17,7 +17,12 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-KCAL_PER_KG_FAT = 7700.0
+# 1 kg de grasa ~ 7.000 kcal (la regla que usa el bot). Es una aproximacion:
+# el tejido adiposo es ~87% lipid, asi que 1 kg de grasa pura valdria mas, y
+# el peso del cuerpo no es solo grasa (agua, glucogeno, contenido intestinal,
+# masa muscular). Por eso la equivalencia sirve para ver la TENDENCIA, no
+# para esperar un numero exacto en la bascula.
+KCAL_PER_KG_FAT = 7000.0
 
 ACTIVITY_LEVELS: dict[str, tuple[str, float]] = {
     "sedentary": ("Sedentario (poco o nada de ejercicio)", 1.2),
@@ -281,7 +286,7 @@ def build_target(
     El mantenimiento (kcal que el cuerpo gasta al no hacer nada especial) es
     la referencia. El objetivo diario es mantenimiento menos el deficit
     planned, y el deficit se mide **por semana**: cada kilo que se quiere
-    quitar son 7 700 kcal de ahorro repartidas entre los dias.
+    quitar son 7.000 kcal de ahorro repartidas entre los dias.
     """
     notes: list[str] = []
     bmr, bmr_formula = compute_bmr_detail(sex, weight_kg, height_cm, age, body_fat_pct)
@@ -334,7 +339,7 @@ def build_target(
             notes.append(
                 f"Objetivo manual: {daily} kcal. Son {abs(deficit)} kcal "
                 f"{'menos' if deficit > 0 else 'mas'} que tu mantenimiento "
-                f"({maintenance} kcal) -> ~{abs(weekly_goal) / 7 / 7700:.2f} kg/semana."
+                f"({maintenance} kcal) -> ~{abs(weekly_goal) / 7 / KCAL_PER_KG_FAT:.2f} kg/semana."
             )
             if maintenance and abs(deficit) > maintenance * 0.25:
                 notes.append(

@@ -416,12 +416,12 @@ Implementada en `foodbot/core/nutrition.py`.
 
 El **mantenimiento** (las kcal que el cuerpo gasta al día) es la referencia.
 El **objetivo diario** es el mantenimiento menos el déficit planificado, y el
-déficit se mide **por semana**:
+déficit se mide **por semana** (1 kg de grasa ≈ 7.000 kcal):
 
 ```
 Mantenimiento diario  M  =  2 174 kcal
-Objetivo semanal      G  =  0.5 kg/semana × 7 700 kcal/kg = 3 850 kcal
-Objetivo diario       M − G/7 = 2 174 − 550 = 1 624 kcal/día
+Objetivo semanal      G  =  0.5 kg/semana × 7 000 kcal/kg = 3 500 kcal
+Objetivo diario       M − G/7 = 2 174 − 500 = 1 674 kcal/día
 ```
 
 Cada día que comes por debajo del mantenimiento **ahorras**; cada día que te
@@ -529,7 +529,17 @@ Semana a semana
 Detalles:
 
 - El objetivo de la barra son las kcal que faltan para tu peso objetivo
-  (`(peso actual − peso objetivo) × 7.700`).
+  (`(peso actual − peso objetivo) × 7.000`).
+- **La equivalencia es 1 kg de grasa ≈ 7.000 kcal** (la regla que usa el
+  bot). Es una aproximación: el tejido adiposo es ~87% lípido, así que 1 kg
+  de grasa pura valdría más, y el peso del cuerpo no es solo grasa (agua,
+  glucógeno, contenido intestinal, músculo). Por eso la equivalencia sirve
+  para ver la **tendencia**, no para esperar un número exacto en la báscula.
+- El bot recuerda este aviso en `/meta` y en `/semana`: el peso fluctúa por
+  el agua y el glucógeno (sal, carbohidratos, entrenamiento), por el
+  contenido intestinal, por la hora del día y por el ciclo menstrual. Lo que
+  cuenta es la **media de los pesos de dos semanas**, que es exactamente lo
+  que usa la tendencia.
 - Cada semana se guarda con el **mantenimiento de entonces** (el medio de los
   objetivos de esos días), no con el de hoy: tu peso y tu actividad cambian.
 - La semana en curso se muestra aparte y todavía puede moverse.

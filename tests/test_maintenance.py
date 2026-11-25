@@ -90,7 +90,7 @@ def test_the_calibrated_maintenance_wins_over_the_formula():
 
 def test_the_weekly_goal_is_the_kg_per_week_in_kcal():
     t = target(weekly_rate_kg=0.5)
-    assert t.weekly_goal_kcal == 3850  # 0.5 kg * 7700 kcal/kg
+    assert t.weekly_goal_kcal == 3500  # 0.5 kg * 7000 kcal/kg
     assert t.daily_kcal == t.maintenance_kcal - round(t.weekly_goal_kcal / 7)
 
 

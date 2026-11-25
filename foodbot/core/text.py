@@ -41,6 +41,21 @@ def fmt_g(value: float | None) -> str:
     return f"{value:.0f} g" if value is not None else "-"
 
 
+SCALE_NOTE = (
+    "\U0001f4a7 <b>Ojo con la bascula:</b> un kilo de un dia a otro no es un "
+    "kilo de grasa. El peso cambia por el agua y el glucogeno (la sal, los "
+    "carbohidratos, el glucogeno que se vacia al entrenar), por el contenido "
+    "intestinal, por la hora del dia y por el ciclo menstrual. M\u00e1s a\u00fan "
+    "la <b>media de tus pesos de dos semanas</b> (que es justo lo que uso para "
+    "la tendencia), nunca un peso suelto."
+)
+
+SCALE_NOTE_SHORT = (
+    "\U0001f4a7 <i>El peso fluctua por el agua, el glucogeno, la sal y la "
+    "hora del d\u00eda: mira la tendencia de dos semanas, no un d\u00eda suelto.</i>"
+)
+
+
 def goal_label(goal: str | None) -> str:
     return GOALS.get((goal or "").lower(), "Objetivo")
 
@@ -142,9 +157,11 @@ def accumulated_message(data: dict[str, Any], width: int = 14) -> str:
         # El total negativo: las semanas en las que te pasaste pesan mas.
         lines.append(f"{progress_bar(0, goal or 1, width)}  \u2212{abs(total)} kcal")
         lines.append(
-            f"Llevas <b>{abs(kg):.2f} kg</b> de m\u00e1s ahorrados: "
-            "las semanas en las que te pasaste restan del total."
+            f"Vas <b>{abs(kg):.2f} kg</b> por encima: las semanas en las que "
+            "te pasaste restan del total."
         )
+
+    lines.append(f"\n{SCALE_NOTE_SHORT}")
 
     if history:
         lines.append("\n<b>Semana a semana</b>")
@@ -467,6 +484,8 @@ def progress_message(progress: dict[str, Any]) -> str:
         lines.append(f"\n🟡 {esc(progress.get('advice', ''))}")
     elif progress.get("advice"):
         lines.append(f"\n💡 {esc(progress['advice'])}")
+
+    lines.append(f"\n{SCALE_NOTE}")
     return "\n".join(lines)
 
 

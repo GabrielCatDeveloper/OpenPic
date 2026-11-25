@@ -48,7 +48,12 @@ from foodbot.config import Config
 from foodbot.core.db import Database, iso, utcnow
 from foodbot.core.foodr1 import FoodR1Client, InferenceError, sniff_mime
 from foodbot.core.limits import LimitService
-from foodbot.core.nutrition import ACTIVITY_LEVELS, activity_label, estimate_body_fat_pct
+from foodbot.core.nutrition import (
+    ACTIVITY_LEVELS,
+    KCAL_PER_KG_FAT,
+    activity_label,
+    estimate_body_fat_pct,
+)
 from foodbot.core.privacy import PhotoStore, erase_user_data, storage_report
 from foodbot.core.text import (
     accumulated_message,
@@ -1285,7 +1290,7 @@ class PublicBot:
             lines.append(
                 f"Eso son {abs(target.deficit_kcal)} kcal "
                 f"{'menos' if target.deficit_kcal > 0 else 'm\u00e1s'} que tu "
-                f"mantenimiento: ~{abs(target.weekly_goal_kcal) / 7 / 7700:.2f} kg/semana."
+                f"mantenimiento: ~{abs(target.weekly_goal_kcal) / 7 / KCAL_PER_KG_FAT:.2f} kg/semana."
             )
         else:
             lines.append(
@@ -1363,7 +1368,7 @@ class PublicBot:
             return
 
         deficit = target.maintenance_kcal - chosen
-        kg_week = abs(deficit) * 7 / 7700
+        kg_week = abs(deficit) * 7 / KCAL_PER_KG_FAT
         if deficit > 0:
             meaning = (
                 f"Eso son <b>{deficit} kcal menos</b> que tu mantenimiento "
@@ -1459,7 +1464,7 @@ class PublicBot:
                 extra = (
                     f"\n\nMantenimiento: {target.maintenance_kcal} kcal/d\u00eda\n"
                     f"Tu objetivo: <b>{chosen} kcal/d\u00eda</b>\n"
-                    f"Eso es ~{abs(target.weekly_goal_kcal) / 7 / 7700:.2f} kg/semana."
+                    f"Eso es ~{abs(target.weekly_goal_kcal) / 7 / KCAL_PER_KG_FAT:.2f} kg/semana."
                 )
             await self._safe_send(
                 update,
