@@ -3,10 +3,11 @@
 .venv/
 venv/
 
-# Datos y modelos
-data/
-models/
-logs/
+# Datos y modelos (solo en la raiz del proyecto: foodbot/data/ es CODIGO,
+# es la tabla de ingredientes)
+/data/
+/models/
+/logs/
 *.db
 *.db-wal
 *.db-shm
