@@ -167,6 +167,7 @@ class UserService:
             maintenance_override=profile.get("maintenance_kcal"),
             calibrated_maintenance=self.calibrated_maintenance(user_id),
             hormone_therapy=profile.get("hormone_therapy"),
+            gentle_mode=bool(profile.get("gentle_mode")),
         )
         self.db.save_target(
             user_id,
@@ -504,8 +505,11 @@ class UserService:
             if goal == "lose" and weekly_rate > -0.1:
                 plateau = True
                 advice = (
-                    "Tu peso no se ha movido en los ultimos dias. Revisa las raciones "
-                    "de aceites y las porciones: suelen ser el error mas comun."
+                    "Tu peso se ha quedado quieto estos dias, y a menudo no es "
+                    "grasa: el agua, el glucogeno y la sal mueven la bascula mas "
+                    "de lo que parece. Mira la media de dos semanas y, si el "
+                    "peso de verdad no se mueve, revisa las raciones de aceite "
+                    "y las porciones."
                 )
             elif goal == "lose" and weekly_rate < -1.2:
                 advice = (

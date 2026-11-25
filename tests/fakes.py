@@ -66,6 +66,7 @@ class FakeMessage:
         self.replies: list[str] = []
         self.edits: list[str] = []
         self.documents: list[bytes] = []
+        self.stickers: list[dict[str, Any]] = []
         self.replies_markup: Any = None
         self.bot = FakeBot()
 
@@ -82,6 +83,10 @@ class FakeMessage:
         self.documents.append(document or b"")
         return self
 
+    async def reply_sticker(self, sticker: str | None = None, **kwargs: Any) -> "FakeMessage":
+        self.stickers.append({"sticker": sticker, **kwargs})
+        return self
+
     def get_bot(self) -> FakeBot:
         return self.bot
 
@@ -96,6 +101,10 @@ class FakeMessage:
     @property
     def everything(self) -> str:
         return "\n".join(self.replies + self.edits)
+
+    @property
+    def sticker_captions(self) -> list[str]:
+        return [s.get("caption") or "" for s in self.stickers]
 
 
 class FakeCallbackQuery:

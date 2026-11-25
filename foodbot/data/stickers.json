@@ -1,0 +1,14 @@
+{
+  "set_name": "openpic_estado_by_open_pic_app_bot",
+  "owner_user_id": 8752690490,
+  "stickers": {
+    "contento": "BQACAgQAAxUHawdrqQLZRBLrUlI0XgjIayDodlsAAjkiAAJQPDhQGVIS6mg3j0A9BA",
+    "preocupado": "BQACAgQAAxUHawdrqYYCQo6Hj4BKDizaVCuocKcAAjoiAAJQPDhQQ8LeDJFHN549BA",
+    "triste": "BQACAgQAAxUHawdrqd95hAJ4aoQHSzvkcoopq6wAAjsiAAJQPDhQReCgK5CL-sw9BA"
+  },
+  "emojis": {
+    "contento": "🙂",
+    "preocupado": "😟",
+    "triste": "😕"
+  }
+}

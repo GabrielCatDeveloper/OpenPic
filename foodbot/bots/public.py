@@ -56,6 +56,8 @@ from foodbot.core.nutrition import (
 )
 from foodbot.core.privacy import PhotoStore, erase_user_data, storage_report
 from foodbot.core.advice import specific_tips
+from foodbot.core.feedback import meal_feedback
+from foodbot.core.stickers import sticker_for
 from foodbot.core.text import (
     accumulated_message,
     advice_message,
@@ -83,6 +85,9 @@ log = logging.getLogger("foodbot.public")
     SEX,
     HORMONES,
     PRONOUNS,
+    LIKES,
+    AVOID,
+    GENTLE,
     AGE,
     HEIGHT,
     WEIGHT,
@@ -93,7 +98,7 @@ log = logging.getLogger("foodbot.public")
     ACTIVITY,
     GOAL,
     TARGET_WEIGHT,
-) = range(14)
+) = range(17)
 
 PRONOUN_LABELS = {
     "male": "él",
@@ -112,10 +117,11 @@ JOB_LABELS = {
 PROFILE_QUESTIONS: dict[str, tuple[str, str]] = {
     "name": ("<b>\u00bfC\u00f3mo te llamas?</b>\n<i>Escribe tu nombre o el apodo que prefieras.</i>", "text"),
     "sex": (
-        "<b>\u00bfCu\u00e1l es tu sexo?</b>\n"
-        "<i>Solo lo uso para la ecuaci\u00f3n del metabolismo (el resto de "
-        "c\u00e1lculo va con tu peso, tu edad y tu composici\u00f3n corporal). "
-        "Si prefieres, elige <b>Otro</b>.</i>",
+        "<b>\u00bfCon qu\u00e9 referencia te calculo el metabolismo?</b>\n"
+        "<i>Es solo para los n\u00fameros (las kcal y el suelo de seguridad). "
+        "Si me das tu % de grasa, el c\u00e1lculo va por composici\u00f3n corporal, "
+        "que es lo m\u00e1s preciso y no depende de esta respuesta. El c\u00f3mo "
+        "te llamo ser\u00e1 como me lo pidas despu\u00e9s.</i>",
         "sex",
     ),
     "hormones": (
@@ -130,6 +136,27 @@ PROFILE_QUESTIONS: dict[str, tuple[str, str]] = {
         "<i>Solo para darte el consejo que corresponde (hierro, calcio, "
         "prote\u00edna\u2026). Puedes saltarlo.</i>",
         "pronouns",
+    ),
+    "likes": (
+        "<b>\u00bfQu\u00e9 te gusta?</b>\n"
+        "<i>Sep\u00e1ralo con comas (ej. <code>arroz, pollo, pescado</code>). Lo "
+        "uso para proponerte alternativas que te apetzcan cuando te quede "
+        "hambre. Es opcional.</i>",
+        "text",
+    ),
+    "avoid": (
+        "<b>\u00bfHay algo que no te guste o no puedas comer?</b>\n"
+        "<i>Sep\u00e1ralo con comas (ej. <code>lacteos, marisco, gluten</code>). "
+        "No te voy a proponer nunca esas cosas. Es opcional.</i>",
+        "text",
+    ),
+    "gentle": (
+        "<b>\u00bfHay alg\u00fan motivo para que no te calcule un d\u00e9ficit?</b>\n"
+        "<i>Si has tenido trastornos de la alimentaci\u00f3n, est\u00e1s "
+        "embarazada, tomas medicaci\u00f3n o prefieres no contar, dime lo y "
+        "te dejo en <b>modo suave</b>: sin objetivos, sin cuentas y sin "
+        "estickers. Puedes cambiarlo cuando quieras.</i>",
+        "gentle",
     ),
     "age": ("<b>\u00bfCu\u00e1l es tu edad?</b>\n<i>Solo el n\u00famero.</i>", "text"),
     "height": ("<b>\u00bfCu\u00e1l es tu altura en cm?</b>\n<i>Ejemplo: <code>175</code></i>", "text"),
@@ -176,6 +203,9 @@ PROFILE_STEPS: dict[str, int] = {
     "sex": SEX,
     "hormones": HORMONES,
     "pronouns": PRONOUNS,
+    "likes": LIKES,
+    "avoid": AVOID,
+    "gentle": GENTLE,
     "age": AGE,
     "height": HEIGHT,
     "weight": WEIGHT,
@@ -267,6 +297,25 @@ def hormone_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Otro", callback_data="perfil:hormone:other"),
             ],
             [InlineKeyboardButton("\u21e9 Saltar", callback_data="perfil:skip:pronouns")],
+        ]
+    )
+
+
+def gentle_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "No, calc\u00falame el d\u00e9ficit", callback_data="perfil:gentle:no"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Prefiero solo registrar",
+                    callback_data="perfil:gentle:yes",
+                )
+            ],
+            [InlineKeyboardButton("\u21e9 Saltar", callback_data="perfil:skip:age")],
         ]
     )
 
@@ -380,6 +429,30 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         input_field_placeholder="📸 Envía una foto de tu plato…",
+    )
+
+
+def reference_keyboard() -> InlineKeyboardMarkup:
+    """La referencia metabolica: para los numeros, no para identificarte."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "La de un hombre", callback_data="perfil:sex:male"
+                ),
+                InlineKeyboardButton(
+                    "La de una mujer", callback_data="perfil:sex:female"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "La intermedia", callback_data="perfil:sex:other"
+                ),
+                InlineKeyboardButton(
+                    "No lo se: usa mi % de grasa", callback_data="perfil:sex:unknown"
+                ),
+            ],
+        ]
     )
 
 
@@ -527,6 +600,18 @@ class PublicBot:
             states={
                 NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_name)] + skip,
                 SEX: [CallbackQueryHandler(self.cb_sex, pattern=r"^perfil:sex:")] + skip,
+                HORMONES: [
+                    CallbackQueryHandler(self.cb_hormone, pattern=r"^perfil:hormone:")
+                ] + skip,
+                PRONOUNS: [
+                    CallbackQueryHandler(self.cb_pronoun, pattern=r"^perfil:pronoun:")
+                ] + skip,
+                LIKES: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_likes)
+                ] + skip,
+                AVOID: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_avoid)
+                ] + skip,
                 AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_age)] + skip,
                 HEIGHT: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_height)
@@ -724,7 +809,10 @@ class PublicBot:
         ]
         if target:
             lines.append(progress_bar(summary["calories"], target.daily_kcal))
-        lines.append(f"🔥 Racha: <b>{streak} día(s)</b> seguidos registrando comidas.")
+        lines.append(
+            f"📓 Llevas <b>{streak} día(s)</b> seguidos registrando comidas. "
+            "No hace falta la racha: lo que cuenta es la semana."
+        )
         lines.append(f"📸 Te quedan <b>{quota['photos_left']}</b> análisis hoy.")
         lines.append("\nEnvíame una foto cuando quieras.")
         await update.effective_message.reply_text(
@@ -886,6 +974,15 @@ class PublicBot:
                 parse_mode=ParseMode.HTML,
                 reply_markup=meal_actions_keyboard(meal_id),
             )
+
+            # --- 4b. EL STICKER: COMO VA EL DIA --------------------------
+            # Sin reproches y siempre con la semana como contexto: un dia
+            # tonto no es un desastre, el margen esta ahi.
+            consumed_before = max(0, int(summary["calories"]) - int(analysis.calories))
+            feedback = self._feedback_for(
+                user.id, int(analysis.calories), consumed_before
+            )
+            await self._send_feedback(message, feedback)
         except InferenceError as exc:
             log.warning("Fallo de inferencia: %s", exc)
             context.user_data["last_failed_photo"] = file_id
@@ -1681,6 +1778,12 @@ class PublicBot:
             reply_markup=main_menu(),
         )
 
+        # El sticker de como va el dia, igual que con las fotos.
+        summary = self.users.today_summary(user.id)
+        consumed_before = max(0, int(summary["calories"]) - calories)
+        feedback = self._feedback_for(user.id, calories, consumed_before)
+        await self._send_feedback(update.effective_message, feedback)
+
     async def cmd_delete(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._require_auth(update):
             return
@@ -1747,6 +1850,38 @@ class PublicBot:
             document=buffer.getvalue().encode("utf-8"),
             filename="historial_nutrition.csv",
             caption="📤 Tu historial de comidas (últimos 90 días).",
+        )
+
+    # -- como va el dia (sticker) ------------------------------------------
+    def _feedback_for(self, user_id: int, meal_kcal: int, consumed_before: int):
+        """Calcula el sticker y el mensaje segun como va el dia."""
+        target = self.users.daily_target(user_id)
+        daily = int(target.daily_kcal) if target else 0
+        week = self.users.week_summary(user_id)
+        bank = week.get("bank") or {}
+        return meal_feedback(
+            meal_kcal=meal_kcal,
+            consumed_before=consumed_before,
+            daily_target=daily,
+            week_saved=int(bank.get("saved") or 0),
+            week_goal=int(bank.get("goal") or 0),
+        )
+
+    async def _send_feedback(self, message: Any, feedback: Any) -> None:
+        """Manda el sticker con su comentario (o el emoji, si no hay sticker)."""
+        file_id = sticker_for(feedback.sticker)
+        if file_id:
+            try:
+                await message.reply_sticker(
+                    sticker=file_id,
+                    caption=feedback.text,
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("No se pudo enviar el sticker: %s", exc)
+        await message.reply_text(
+            f"{feedback.emoji} {feedback.text}", parse_mode=ParseMode.HTML
         )
 
     # -- funciones inteligentes -------------------------------------------
@@ -2025,6 +2160,14 @@ class PublicBot:
         )
         lines.append(f"Objetivo: {goal_label(profile.get('goal'))}")
         lines.append(f"Peso objetivo: {profile.get('target_weight_kg') or '-'} kg")
+        likes = profile.get("likes")
+        if likes:
+            lines.append(f"Te gusta: {esc(str(likes)[:80])}")
+        avoid = profile.get("avoid")
+        if avoid:
+            lines.append(f"Evitas: {esc(str(avoid)[:80])}")
+        if profile.get("gentle_mode"):
+            lines.append("Modo suave: sin deficit ni cuentas")
         manual = profile.get("daily_kcal_override")
         if manual:
             lines.append(f"Calor\u00edas al d\u00eda: <b>{int(manual)} kcal</b> (fijadas por ti)")
@@ -2041,7 +2184,7 @@ class PublicBot:
         context.user_data["perfil_paso"] = step
         reply_markup: Any = ForceReply()
         if kind == "sex":
-            reply_markup = profile_keyboard()
+            reply_markup = reference_keyboard()
         elif kind == "activity":
             reply_markup = activity_keyboard()
         elif kind == "goal":
@@ -2050,6 +2193,8 @@ class PublicBot:
             reply_markup = hormone_keyboard()
         elif kind == "pronouns":
             reply_markup = pronoun_keyboard()
+        elif kind == "gentle":
+            reply_markup = gentle_keyboard()
         elif kind == "bodyfat":
             reply_markup = bodyfat_keyboard()
         elif kind == "training":
@@ -2090,12 +2235,56 @@ class PublicBot:
         return await self._ask(update, context, "sex")
 
     async def cb_sex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """La referencia metabolica: solo afecta a los numeros."""
         query = update.callback_query
         await query.answer()
-        sex = query.data.split(":")[-1]
-        self.users.update_profile(update.effective_user.id, sex=sex)
+        value = query.data.split(":")[-1]
+        user = update.effective_user
+
+        if value == "unknown":
+            # Sin referencia clara: punto medio y composicion corporal.
+            self.users.update_profile(user.id, sex="other")
+            await query.edit_message_text(
+                "Entendido: uso el punto medio de las referencias y, si me das tu "
+                "% de grasa, el calculo va por composicion corporal.",
+                parse_mode=ParseMode.HTML,
+            )
+            return await self._ask(update, context, "bodyfat")
+
+        self.users.update_profile(user.id, sex=value)
         await query.edit_message_text("✅ Guardado.", parse_mode=ParseMode.HTML)
         return await self._ask(update, context, "hormones")
+
+    async def on_likes(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Que le gusta: para las alternativas."""
+        value = (update.effective_message.text or "").strip()[:200]
+        self.users.update_profile(update.effective_user.id, likes=value)
+        await update.effective_message.reply_text("\u2705 Guardado.", parse_mode=ParseMode.HTML)
+        return await self._ask(update, context, "avoid")
+
+    async def on_avoid(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Lo que no le gusta o no puede comer: se filtra siempre."""
+        value = (update.effective_message.text or "").strip()[:200]
+        self.users.update_profile(update.effective_user.id, avoid=value)
+        await update.effective_message.reply_text("\u2705 Guardado.", parse_mode=ParseMode.HTML)
+        return await self._ask(update, context, "age")
+
+    async def cb_gentle(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Modo suave: sin deficit ni cuentas."""
+        query = update.callback_query
+        await query.answer()
+        value = query.data.split(":")[-1]
+        gentle = value == "yes"
+        self.users.update_profile(update.effective_user.id, gentle_mode=1 if gentle else 0)
+        if gentle:
+            await query.edit_message_text(
+                "\U0001f91a Modo suave activado. Sin objetivos, sin cuentas y sin "
+                "estickers: solo se guarda lo que comes.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await query.edit_message_text("Guardado.", parse_mode=ParseMode.HTML)
+        return await self._ask(update, context, "age")
 
     async def on_age(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         age = self._parse_number(update, update.effective_message.text or "")
@@ -2218,7 +2407,7 @@ class PublicBot:
         value = query.data.split(":")[-1]
         self.users.update_profile(update.effective_user.id, pronouns=value)
         await query.edit_message_text("Guardado.", parse_mode=ParseMode.HTML)
-        return await self._ask(update, context, "age")
+        return await self._ask(update, context, "likes")
 
     async def cb_activity(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
@@ -2235,7 +2424,7 @@ class PublicBot:
         user = update.effective_user
         self.users.update_profile(user.id, goal=goal)
         await query.edit_message_text("✅ Guardado.", parse_mode=ParseMode.HTML)
-        return await self._ask(update, context, "target")
+        return await self._ask(update, context, "gentle")
 
     async def on_target_weight(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         value = self._parse_number(update, update.effective_message.text or "")

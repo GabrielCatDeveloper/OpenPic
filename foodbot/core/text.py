@@ -133,7 +133,8 @@ def week_saving_line(summary: dict[str, Any]) -> str:
 def accumulated_message(data: dict[str, Any], width: int = 14) -> str:
     """La barra del deficit acumulado y el detalle semana a semana.
 
-    Cada semana suma (si ahorraste) o resta (si te pasaste) al total, asi que
+    Cada semana suma (si ahorraste) o resta (si te quedaste por encima) al
+    total, asi que
     la barra sube y baja con el tiempo.
     """
     history = data.get("history") or []
@@ -158,7 +159,7 @@ def accumulated_message(data: dict[str, Any], width: int = 14) -> str:
         lines.append(f"{progress_bar(0, goal or 1, width)}  \u2212{abs(total)} kcal")
         lines.append(
             f"Vas <b>{abs(kg):.2f} kg</b> por encima: las semanas en las que "
-            "te pasaste restan del total."
+            "te quedaste por encima restan del total."
         )
 
     lines.append(f"\n{SCALE_NOTE_SHORT}")
@@ -178,7 +179,8 @@ def accumulated_message(data: dict[str, Any], width: int = 14) -> str:
             )
         lines.append(
             "\n<i>Cada semana se suma al total lo que ahorraste y se resta lo que "
-            "te pasaste. La semana en curso todavia puede moverse.</i>"
+            "te quedaste por encima. La semana en curso todavia puede "
+            "moverse.</i>"
         )
     return "\n".join(lines)
 
@@ -283,7 +285,7 @@ def weekly_message(summary: dict[str, Any]) -> str:
         lines.append(f"Ahorrado: <b>{saved} kcal</b>")
     else:
         lines.append(
-            f"Te has pasado <b>{-saved} kcal</b> respecto a tu mantenimiento"
+            f"Vas <b>{-saved} kcal</b> por encima de tu mantenimiento esta semana"
         )
     lines.append(
         f"Te faltan <b>{pending} kcal</b> para el objetivo de la semana"
@@ -431,7 +433,10 @@ def today_message(
             if remaining >= 0:
                 lines.append(f"Te quedan <b>{remaining} kcal</b>.")
             else:
-                lines.append(f"Llevas <b>{-remaining} kcal</b> de más.")
+                lines.append(
+                    f"Vas <b>{-remaining} kcal</b> por encima del objetivo de hoy. "
+                    "La semana las absorbe: mañana sigue igual."
+                )
         lines.append(
             f"🥩 {summary['protein_g']:.0f}/{target.macro.protein_g:.0f} g  ·  "
             f"🍚 {summary['carbs_g']:.0f}/{target.macro.carbs_g:.0f} g  ·  "
@@ -448,8 +453,8 @@ def today_message(
                 )
             else:
                 lines.append(
-                    f"💴 Hoy te has pasado <b>{-saved_today} kcal</b> "
-                    "respecto a tu mantenimiento (lo paga el banco de la semana)."
+                    f"💴 Hoy vas <b>{-saved_today} kcal</b> por encima de "
+                    "tu mantenimiento: lo paga el banco de la semana."
                 )
         if week:
             weekly = week_line(week)
@@ -475,7 +480,9 @@ def today_message(
             if left > 0:
                 lines.append(f"\n<i>📸 Te quedan {left} análisis hoy.</i>")
             else:
-                lines.append("\n<i>📸 Has agotado los análisis de hoy.</i>")
+                lines.append(
+                    "\n<i>📸 Ya has usado los análisis de hoy; mañana se renuevan.</i>"
+                )
     return "\n".join(lines)
 
 

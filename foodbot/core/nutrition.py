@@ -17,6 +17,11 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
+from foodbot.core.safety import (
+    max_safe_weekly_rate,
+    should_not_deficit,
+)
+
 # 1 kg de grasa ~ 7.000 kcal (la regla que usa el bot). Es una aproximacion:
 # el tejido adiposo es ~87% lipid, asi que 1 kg de grasa pura valdria mas, y
 # el peso del cuerpo no es solo grasa (agua, glucogeno, contenido intestinal,
@@ -309,6 +314,7 @@ def build_target(
     maintenance_override: int | None = None,
     calibrated_maintenance: int | None = None,
     hormone_therapy: str | None = None,
+    gentle_mode: bool = False,
 ) -> EnergyTarget:
     """Calcula el objetivo completo con las salvaguardas aplicadas.
 
@@ -347,8 +353,28 @@ def build_target(
     breakdown["maintenance"] = maintenance
     breakdown["source"] = source
 
+    # --- Salvaguardas: hay gente a la que NO se le propone deficit.
+    blocked = should_not_deficit(
+        weight_kg=weight_kg,
+        height_cm=height_cm,
+        age=age,
+        goal=goal,
+        gentle_mode=gentle_mode,
+    )
+    if blocked:
+        notes.append(blocked)
+        goal = "maintain"
+        daily_kcal_override = None
+
     # --- El deficit se define por semana.
     rate = weekly_rate_kg if weekly_rate_kg is not None else RATES["moderate"]
+    max_rate = max_safe_weekly_rate(weight_kg)
+    if goal == "lose" and rate > max_rate:
+        rate = max_rate
+        notes.append(
+            f"He limitado el ritmo a {rate:.2f} kg/semana (el 1% de tu peso): "
+            "bajar mas rapido no es mas sano, es mas peligroso."
+        )
 
     if daily_kcal_override:
         # --- OBJETIVO MANUAL: manda lo que el usuario ha elegido.
