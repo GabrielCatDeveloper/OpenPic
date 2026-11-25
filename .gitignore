@@ -1,0 +1,23 @@
+# Entorno
+.env
+.venv/
+venv/
+
+# Datos y modelos
+data/
+models/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Editores
+.vscode/
+.idea/
+.DS_Store

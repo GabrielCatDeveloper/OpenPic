@@ -1,0 +1,32 @@
+# Servicio del SISTEMA para el motor de inferencia (requiere sudo).
+#
+#   scripts/install_autostart.sh --system
+#
+# Dejo los marcadores @PROJECT@ y @USER@ porque este fichero es una plantilla:
+# el instalador los sustituye por las rutas reales. Si lo copias a mano,
+# sustituyelos tu.
+
+[Unit]
+Description=llama-server con Food-R1 (VLM de nutricion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@PROJECT@
+# En una iGPU con RAM compartida el modelo entero no cabe en la GPU: va por
+# CPU. Con una GPU dedicada de 16 GB, pon NGL=99.
+Environment=NGL=0
+Environment=CACHE_TYPE=q8_0
+Environment=CTX=4096
+ExecStart=@PROJECT@/scripts/run_llama_server.sh q8_0
+Restart=always
+RestartSec=15
+# El modelo es grande: el arranque puede tardar mas de un minuto.
+TimeoutStartSec=600
+StandardOutput=append:@PROJECT@/logs/llama-server.log
+StandardError=append:@PROJECT@/logs/llama-server.log
+
+[Install]
+WantedBy=multi-user.target

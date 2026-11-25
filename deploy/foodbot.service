@@ -1,0 +1,31 @@
+# Servicio del SISTEMA para los dos bots de Telegram (requiere sudo).
+#
+#   scripts/install_autostart.sh --system
+#
+# Dejo los marcadores @PROJECT@ y @USER@ porque este fichero es una plantilla:
+# el instalador los sustituye por las rutas reales. Si lo copias a mano,
+# sustituyelos tu.
+
+[Unit]
+Description=Bot de nutricion con Food-R1 (Telegram)
+After=network-online.target llama-server.service
+Wants=network-online.target llama-server.service
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@PROJECT@
+Environment=PYTHONUNBUFFERED=1
+# Al arrancar el PC el modelo tarda en cargarse: el bot espera a que el
+# motor responda antes de empezar a atender mensajes.
+ExecStartPre=@PROJECT@/scripts/wait_for_engine.sh
+ExecStart=/usr/bin/python3 -m foodbot.main
+Restart=always
+RestartSec=10
+# La espera del motor puede durar varios minutos.
+TimeoutStartSec=900
+StandardOutput=append:@PROJECT@/logs/bot.log
+StandardError=append:@PROJECT@/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target

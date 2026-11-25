@@ -1,0 +1,8 @@
+# Motor de Telegram
+python-telegram-bot>=21.11,<23
+
+# Cliente HTTP para el endpoint de inferencia
+httpx>=0.27,<1
+
+# Desarrollo / tests
+pytest>=8.0

@@ -1,0 +1,38 @@
+# Servicio de USUARIO para el motor de inferencia.
+#
+#   scripts/install_autostart.sh
+#
+# Se instala en ~/.config/systemd/user/. Con `loginctl enable-linger` el
+# gestor de servicios de usuario arranca al iniciar el PC, sin esperar a que
+# alguien entre en sesion.
+#
+#   systemctl --user status llama-server
+#   systemctl --user restart llama-server
+#   journalctl --user -u llama-server -f
+#
+# Los marcadores @PROJECT@ y @USER@ los sustituye el instalador.
+
+[Unit]
+Description=llama-server con Food-R1 (VLM de nutricion)
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@PROJECT@
+# En esta maquina (iGPU con RAM compartida) el BF16 no entra y con -ngl 99 la
+# UMA falla al reservar el modelo: el modelo va entero en CPU. Con una GPU
+# dedicada de 16 GB, pon NGL=99.
+Environment=NGL=0
+Environment=CACHE_TYPE=q8_0
+Environment=CTX=4096
+ExecStart=@PROJECT@/scripts/run_llama_server.sh q8_0
+Restart=always
+RestartSec=15
+# El modelo es grande: el arranque puede tardar mas de un minuto.
+TimeoutStartSec=600
+StandardOutput=append:@PROJECT@/logs/llama-server.log
+StandardError=append:@PROJECT@/logs/llama-server.log
+
+[Install]
+WantedBy=default.target
