@@ -51,6 +51,7 @@ from foodbot.core.limits import LimitService
 from foodbot.core.nutrition import ACTIVITY_LEVELS, activity_label, estimate_body_fat_pct
 from foodbot.core.privacy import PhotoStore, erase_user_data, storage_report
 from foodbot.core.text import (
+    accumulated_message,
     analysis_message,
     esc,
     goal_label,
@@ -1129,6 +1130,7 @@ class PublicBot:
         user = update.effective_user
         summary = self.users.today_summary(user.id)
         week = self.users.week_summary(user.id)
+        accumulated = self.users.accumulated_savings(user.id)
         await self._safe_send(
             update,
             today_message(
@@ -1136,6 +1138,7 @@ class PublicBot:
                 self.users.tz,
                 self._quota_snapshot(user.id),
                 week=week,
+                accumulated=accumulated,
             ),
             parse_mode=ParseMode.HTML,
             reply_markup=main_menu(),
@@ -1144,9 +1147,14 @@ class PublicBot:
     async def _send_week(self, update: Update) -> None:
         user = update.effective_user
         week = self.users.week_summary(user.id)
+        accumulated = self.users.accumulated_savings(user.id)
+        text = weekly_message(week)
+        block = accumulated_message(accumulated)
+        if block:
+            text = f"{text}\n\n{block}"
         await self._safe_send(
             update,
-            weekly_message(week),
+            text,
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(
                 [

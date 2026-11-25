@@ -21,6 +21,7 @@ from foodbot.core.nutrition import (
     savings_bank,
     weight_trend,
 )
+from foodbot.core.timeutil import parse_day
 from foodbot.core.timeutil import (
     day_bounds as _day_bounds,
     day_key,
@@ -300,6 +301,117 @@ class UserService:
             "by_day": by_day,
             "target": target,
             "bank": bank,
+        }
+
+    # -- cierre semanal y acumulado ----------------------------------------
+    def _week_maintenance(self, user_id: int, week_key: str, fallback: int) -> int:
+        """Mantenimiento medio de una semana, segun lo que se guardo cada dia.
+
+        Se usa el de entonces (la tabla de objetivos lo guarda por dia), no
+        el de hoy: el peso y la actividad cambian con el tiempo.
+        """
+        start_day = parse_day(week_key)
+        end_day = (start_day + timedelta(days=6)).strftime("%Y-%m-%d")
+        rows = self.db.query(
+            "SELECT tdee FROM targets WHERE user_id = ? AND day >= ? AND day <= ? AND tdee > 0",
+            (user_id, week_key, end_day),
+        )
+        values = [int(r["tdee"]) for r in rows if r["tdee"]]
+        if values:
+            return int(round(sum(values) / len(values)))
+        return int(fallback)
+
+    def _week_savings(self, user_id: int, week_key: str, fallback_maintenance: int) -> dict[str, Any]:
+        """Resultado de una semana: cuanto se ha ahorrado (o gastado)."""
+        start, end, _ = _week_bounds(week_key, self.tz)
+        meals = self.db.meals_between(user_id, start, end)
+        by_day: dict[str, int] = {}
+        for meal in meals:
+            key = day_key(parse_iso(meal["eaten_at"]), self.tz)
+            by_day[key] = by_day.get(key, 0) + int(meal["calories"] or 0)
+        consumed = sum(by_day.values())
+        logged = len(by_day)
+        maintenance = self._week_maintenance(user_id, week_key, fallback_maintenance)
+        saved = logged * maintenance - consumed
+        return {
+            "saved": int(saved),
+            "consumed": int(consumed),
+            "logged_days": logged,
+            "maintenance": int(maintenance),
+        }
+
+    def _close_pending_weeks(self, user_id: int, current_week: str, fallback: int) -> int:
+        """Cierra las semanas anteriores que aun no estan guardadas."""
+        closed = {row["week"] for row in self.db.list_week_savings(user_id)}
+        start = parse_day(current_week)
+        created = 0
+        for index in range(1, 53):  # hasta un año hacia atras
+            key = (start - timedelta(days=7 * index)).strftime("%Y-%m-%d")
+            if key in closed:
+                continue
+            data = self._week_savings(user_id, key, fallback)
+            if not data["logged_days"]:
+                continue  # una semana sin registros no cuenta
+            self.db.save_week_savings(user_id, key, **data)
+            created += 1
+        return created
+
+    def accumulated_savings(self, user_id: int, weeks: int = 12) -> dict[str, Any]:
+        """El total acumulado: cada semana suma o resta al contador.
+
+        Devuelve el historial de las ultimas semanas (con el total que
+        llevaba en cada una) y el total actual.
+        """
+        weeks = max(1, min(52, int(weeks)))
+        target = self.daily_target(user_id)
+        fallback_maintenance = int(target.maintenance_kcal) if target else 0
+
+        _, _, current_week = _week_bounds(None, self.tz)
+        self._close_pending_weeks(user_id, current_week, fallback_maintenance)
+
+        closed = {row["week"]: dict(row) for row in self.db.list_week_savings(user_id)}
+
+        # Historial completo (todas las semanas cerradas) y total.
+        total = 0
+        history: list[dict[str, Any]] = []
+        for key in sorted(closed):
+            row = closed[key]
+            total += int(row["saved"])
+            history.append(
+                {
+                    "week": key,
+                    "saved": int(row["saved"]),
+                    "consumed": int(row["consumed"]),
+                    "logged_days": int(row["logged_days"]),
+                    "total": total,
+                    "current": False,
+                }
+            )
+
+        # La semana en curso va aparte: aun se puede mover.
+        current = self._week_savings(user_id, current_week, fallback_maintenance)
+        current["week"] = current_week
+        current["total"] = total + current["saved"]
+        current["current"] = True
+        history.append(current)
+        total += current["saved"]
+
+        # Objetivo: las kcal que faltan para llegar al peso objetivo.
+        goal_kcal = None
+        profile = self.profile(user_id)
+        goal_weight = profile.get("target_weight_kg")
+        weight = profile.get("weight_kg")
+        if goal_weight and weight:
+            goal_kcal = max(0, int(round((float(weight) - float(goal_weight)) * KCAL_PER_KG_FAT)))
+
+        return {
+            "history": history[-weeks:] if len(history) > weeks else history,
+            "all_history": history,
+            "total": total,
+            "current": current,
+            "goal_kcal": goal_kcal,
+            "kg_equivalent": round(total / KCAL_PER_KG_FAT, 2),
+            "weeks_counted": len([h for h in history if not h["current"]]),
         }
 
     def savings_history(self, user_id: int, days: int = 30) -> dict[str, Any]:

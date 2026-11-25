@@ -135,6 +135,9 @@ def erase_user_data(db: Database, user_id: int) -> dict[str, int]:
     counts["targets"] = db.execute("DELETE FROM targets WHERE user_id = ?", (user_id,)).rowcount
     counts["usage"] = db.execute("DELETE FROM usage WHERE user_id = ?", (user_id,)).rowcount
     counts["cache"] = db.execute("DELETE FROM cache WHERE user_id = ?", (user_id,)).rowcount
+    counts["weekly_savings"] = db.execute(
+        "DELETE FROM weekly_savings WHERE user_id = ?", (user_id,)
+    ).rowcount
     # El token deja de estar vinculado: el usuario ya no tiene acceso al bot.
     counts["tokens"] = db.execute(
         "UPDATE tokens SET revoked = 1, bound_user_id = NULL WHERE bound_user_id = ?",

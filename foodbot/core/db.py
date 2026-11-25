@@ -133,6 +133,21 @@ CREATE TABLE IF NOT EXISTS cache (
 CREATE INDEX IF NOT EXISTS idx_cache_user ON cache(user_id);
 CREATE INDEX IF NOT EXISTS idx_cache_expiry ON cache(expires_at);
 
+-- Cierre semanal del banco de ahorro: lo que cada semana sumo (o resto) al
+-- total acumulado. Se guarda al cerrar la semana para no recalcularlo con el
+-- mantenimiento de hoy (que ya no es el de entonces).
+CREATE TABLE IF NOT EXISTS weekly_savings (
+    user_id      INTEGER NOT NULL,
+    week         TEXT    NOT NULL,   -- lunes de la semana ('YYYY-MM-DD')
+    saved        INTEGER NOT NULL,   -- kcal ahorradas esa semana (+ o -)
+    consumed     INTEGER NOT NULL,
+    logged_days  INTEGER NOT NULL,
+    maintenance  INTEGER NOT NULL,   -- mantenimiento medio de esa semana
+    closed_at    TEXT    NOT NULL,
+    PRIMARY KEY (user_id, week)
+);
+CREATE INDEX IF NOT EXISTS idx_weekly_savings_user ON weekly_savings(user_id, week);
+
 -- Apodos que usa el administrador para autorizar a alguien sin recordar su
 -- id numerico de Telegram: 'laura' -> 123456789
 CREATE TABLE IF NOT EXISTS aliases (
@@ -322,6 +337,34 @@ class Database:
             (user_id, weight_kg, to_utc_iso(logged_at) if logged_at else iso()),
         )
         return int(cur.lastrowid or 0)
+
+    # -- cierre semanal del banco -----------------------------------------
+    def save_week_savings(self, user_id: int, week: str, **fields: Any) -> None:
+        """Guarda el resultado de una semana ya cerrada."""
+        self.execute(
+            "INSERT INTO weekly_savings "
+            "(user_id, week, saved, consumed, logged_days, maintenance, closed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, week) DO UPDATE SET "
+            "saved=excluded.saved, consumed=excluded.consumed, "
+            "logged_days=excluded.logged_days, maintenance=excluded.maintenance, "
+            "closed_at=excluded.closed_at",
+            [
+                user_id,
+                week,
+                int(fields.get("saved") or 0),
+                int(fields.get("consumed") or 0),
+                int(fields.get("logged_days") or 0),
+                int(fields.get("maintenance") or 0),
+                fields.get("closed_at") or iso(),
+            ],
+        )
+
+    def list_week_savings(self, user_id: int) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM weekly_savings WHERE user_id = ? ORDER BY week ASC",
+            (user_id,),
+        )
 
     def weights_between(self, user_id: int, start: str, end: str) -> list[sqlite3.Row]:
         return self.query(

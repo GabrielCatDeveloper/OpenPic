@@ -115,6 +115,80 @@ def week_saving_line(summary: dict[str, Any]) -> str:
     )
 
 
+def accumulated_message(data: dict[str, Any], width: int = 14) -> str:
+    """La barra del deficit acumulado y el detalle semana a semana.
+
+    Cada semana suma (si ahorraste) o resta (si te pasaste) al total, asi que
+    la barra sube y baja con el tiempo.
+    """
+    history = data.get("history") or []
+    total = int(data.get("total") or 0)
+    goal = data.get("goal_kcal")
+    kg = float(data.get("kg_equivalent") or 0.0)
+
+    lines = ["<b>📊 Acumulado</b>"]
+    weeks_counted = data.get("weeks_counted", 0)
+    if total >= 0:
+        if goal:
+            lines.append(f"{progress_bar(total, goal, width)}  {total}/{goal} kcal")
+        else:
+            lines.append(f"<b>{total} kcal</b> ahorradas en total")
+        if kg:
+            lines.append(
+                f"Eso son <b>{kg:.2f} kg</b> de grasa ahorrados "
+                f"en {weeks_counted} semanas."
+            )
+    else:
+        # El total negativo: las semanas en las que te pasaste pesan mas.
+        lines.append(f"{progress_bar(0, goal or 1, width)}  \u2212{abs(total)} kcal")
+        lines.append(
+            f"Llevas <b>{abs(kg):.2f} kg</b> de m\u00e1s ahorrados: "
+            "las semanas en las que te pasaste restan del total."
+        )
+
+    if history:
+        lines.append("\n<b>Semana a semana</b>")
+        for item in history:
+            saved = int(item.get("saved") or 0)
+            running = int(item.get("total") or 0)
+            when = _week_label(item.get("week"))
+            sign = "+" if saved >= 0 else ""
+            current = " <i>(en curso)</i>" if item.get("current") else ""
+            color = "" if saved >= 0 else " 🔴"
+            lines.append(
+                f"  {when} → <b>{sign}{saved} kcal</b>{color} · "
+                f"total {running} kcal{current}"
+            )
+        lines.append(
+            "\n<i>Cada semana se suma al total lo que ahorraste y se resta lo que "
+            "te pasaste. La semana en curso todavia puede moverse.</i>"
+        )
+    return "\n".join(lines)
+
+
+def _week_label(week_key: str | None) -> str:
+    """'2026-11-17' -> '17/11'."""
+    if not week_key:
+        return "-"
+    try:
+        return parse_day(str(week_key)).strftime("%d/%m")
+    except (TypeError, ValueError):
+        return str(week_key)
+
+
+def accumulated_line(data: dict[str, Any]) -> str:
+    """Linea corta con el total acumulado (para /hoy)."""
+    total = int(data.get("total") or 0)
+    kg = float(data.get("kg_equivalent") or 0.0)
+    if not total:
+        return ""
+    sign = "+" if total >= 0 else ""
+    return (
+        f"📊 Acumulado: <b>{sign}{total} kcal</b> "
+        f"({abs(kg):.2f} kg) en {data.get('weeks_counted', 0)} semanas"
+    )
+
+
 def weekly_message(summary: dict[str, Any]) -> str:
     """Mensaje completo de la semana: presupuesto, margen y dia a dia."""
     target = summary.get("target")
@@ -206,7 +280,8 @@ def weekly_message(summary: dict[str, Any]) -> str:
     lines.append(
         "\n<i>Tu mantenimiento es la referencia: lo que comes por debajo se "
         "ahorra en el deficit de la semana y lo que te pasas se gasta de ahi. "
-        "Un dia fuera de la raya no rompe la semana.</i>"
+        "Un dia fuera de la raya no rompe la semana. Los dias sin registro no "
+        "cuentan: sin datos no se inventa nada.</i>"
     )
     return "\n".join(lines)
 
@@ -291,6 +366,7 @@ def today_message(
     tz: tzinfo = UTC,
     quota: dict[str, int] | None = None,
     week: dict[str, Any] | None = None,
+    accumulated: dict[str, Any] | None = None,
 ) -> str:
     target = summary.get("target")
     kcal = summary.get("calories", 0)
@@ -311,7 +387,8 @@ def today_message(
             f"🥑 {summary['fat_g']:.0f}/{target.macro.fat_g:.0f} g"
         )
         lines.append(target_line(target))
-        if target.maintenance_kcal:
+        if target.maintenance_kcal and summary.get("meals"):
+            # Sin registro no se sabe que se ha comido: no se inventa.
             saved_today = target.maintenance_kcal - kcal
             if saved_today >= 0:
                 lines.append(
@@ -327,6 +404,10 @@ def today_message(
             weekly = week_line(week)
             if weekly:
                 lines.append(weekly)
+        if accumulated:
+            line = accumulated_line(accumulated)
+            if line:
+                lines.append(line)
     else:
         lines.append("<i>Configura tu perfil con /perfil para ver tus objetivos.</i>")
 
