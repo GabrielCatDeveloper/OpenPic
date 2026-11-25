@@ -506,6 +506,36 @@ cálculo automático.
 > cuerpo. Por eso el bot nunca te *obliga* a un número, pero tampoco te deja
 > comiendo por debajo de lo seguro sin explicarte por qué.
 
+### La barra del acumulado
+
+El total no se recalcula cada vez: **cada semana se cierra** y su resultado se
+suma (si ahorraste) o se resta (si te pasaste) al contador. Así el acumulado
+sube y baja con el tiempo y es la medida real de lo que has hecho, no una
+estimación del momento.
+
+```
+📊 Acumulado
+▰▱▱▱▱▱▱▱▱▱▱▱▱▱  2.834/50.050 kcal
+Eso son 0,37 kg de grasa ahorrados en 4 semanas.
+
+Semana a semana
+  26/10 → +1.220 kcal · total 1.220 kcal
+  02/11 → −1.104 kcal 🔴 · total 116 kcal
+  09/11 → +1.896 kcal · total 2.012 kcal
+  16/11 → +822 kcal · total 2.834 kcal
+  23/11 → +0 kcal · total 2.834 kcal (en curso)
+```
+
+Detalles:
+
+- El objetivo de la barra son las kcal que faltan para tu peso objetivo
+  (`(peso actual − peso objetivo) × 7.700`).
+- Cada semana se guarda con el **mantenimiento de entonces** (el medio de los
+  objetivos de esos días), no con el de hoy: tu peso y tu actividad cambian.
+- La semana en curso se muestra aparte y todavía puede moverse.
+- Una semana **sin registros no cuenta**: sin datos no se inventa nada.
+- El cierre semanal también se borra con `/olvidarme`.
+
 ### Salvaguardas
 
 - **Suelo de seguridad**: nunca por debajo de 1200 kcal (mujer) / 1500 (hombre) / 1400 (otro).
