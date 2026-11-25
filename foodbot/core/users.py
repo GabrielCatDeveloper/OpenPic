@@ -166,6 +166,7 @@ class UserService:
             job_activity=profile.get("job_activity"),
             maintenance_override=profile.get("maintenance_kcal"),
             calibrated_maintenance=self.calibrated_maintenance(user_id),
+            hormone_therapy=profile.get("hormone_therapy"),
         )
         self.db.save_target(
             user_id,

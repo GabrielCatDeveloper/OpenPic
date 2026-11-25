@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS users (
     --   job_activity     tipo de trabajo: sedentary | light | physical
     --   maintenance_kcal mantenimiento manual (si el usuario lo conoce)
     body_fat_pct   REAL,
+    hormone_therapy TEXT,   -- none | estrogen | testosterone | other
+    pronouns       TEXT,    -- male | female | neutral (como te llamamos)
     training_days  INTEGER,
     daily_steps    INTEGER,
     job_activity   TEXT,
@@ -162,6 +164,8 @@ CREATE TABLE IF NOT EXISTS aliases (
 # CREATE TABLE IF NOT EXISTS, asi que se migran al abrir la base de datos.
 MIGRATIONS: dict[str, str] = {
     "nickname": "TEXT",
+    "hormone_therapy": "TEXT",
+    "pronouns": "TEXT",
     "body_fat_pct": "REAL",
     "training_days": "INTEGER",
     "daily_steps": "INTEGER",

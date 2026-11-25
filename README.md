@@ -455,7 +455,9 @@ El asistente de perfil los pide uno a uno y los guarda:
 | Dato | Para qué | ¿Obligatorio? |
 |---|---|---|
 | Nombre o apodo | cómo llamarte | Sí |
-| Sexo | ecuación de BMR | Sí |
+| Sexo | solo la ecuación de BMR y el suelo | Sí |
+| Tratamiento hormonal | referencia fisiológica y consejo | No (se puede saltar) |
+| Pronombres | el marco del consejo | No (se puede saltar) |
 | Edad | ecuación de BMR | Sí |
 | Altura | ecuación de BMR | Sí |
 | Peso actual | BMR, TDEE y tendencia | Sí |
@@ -467,6 +469,54 @@ El asistente de perfil los pide uno a uno y los guarda:
 | Objetivo y peso objetivo | el plan | Sí |
 
 Los datos opcionales se pueden **saltar**: el bot nunca bloquea el perfil.
+
+### Consejos específicos (y por qué son deterministas)
+
+Los consejos de `/consejo` **no los genera el modelo**: son reglas con
+evidencia detrás (`foodbot/core/advice.py`). Food-R1 está afinado para
+calorías de un plato, no para dar consejo clínico, y sus tips son genéricos
+además de tardarse dos minutos. El modelo sigue aportando los tips genéricos,
+detrás de los específicos.
+
+| Consejo | Base |
+|---|---|
+| Hierro 18 mg/día con pérdidas menstruales, 8 mg sin ellas | IOM/NIH; EFSA (PRI 16 y 11 mg) |
+| Calcio 1.000 mg (<50 años) / 1.300 mg (≥50), vitamina D 800-1000 UI | RDI; revisión de menopausia (2023) |
+| Proteína 1,6-2,2 g/kg en déficit, y por encima de 1,5 g/kg sube el riesgo de fractura | Revisión de menopausia (2023) |
+| El alcohol suma como un paseo de una hora | Aporte energético del alcohol |
+
+El marco lo deciden **los pronombres** que eliges, no el sexo del perfil: el
+sexo solo se usa para la ecuación y el suelo de seguridad. Quien prefiera un
+marco neutro no recibe ni el bloque de hierro/calcio ni el de proteína/alcohol.
+
+### Personas trans
+
+No hay ecuaciones de metabolismo para personas trans: las que existen están
+construidas sobre el sexo asignado al nacimiento y no encajan con quien está
+en tratamiento hormonal. Lo que hace el bot:
+
+1. **Si hay % de grasa**, usa **Katch-McArdle** (masa libre): la ecuación no
+   mira el sexo, porque lo que determina el gasto es la composición corporal
+   actual.
+2. **Si no hay % de grasa**, usa el **punto medio** de las referencias
+   masculino/femenina y el suelo intermedio (1.400 kcal). Es lo que recomienda
+   la literatura mientras no existan ecuaciones específicas: tras un año de
+   tratamiento hormonal la composición corporal queda en el rango medio
+   (Frenser & Fischer, *Int J Obes* 2025; *Adv Nutr* 2025).
+3. **El consejo se adapta al tratamiento**:
+   - **Testosterona**: sube la masa muscular y baja la grasa (el peso puede
+     subir mientras la grasa baja → mide el % de grasa o la cintura), sube el
+     hemoglobino (más hierro) y el metabolismo cambia durante el primer año
+     (recalibra a los 6 meses).
+   - **Estrogeno**: redistribuye la grasa y baja algo la masa muscular, y al
+     bajar el estrogeno el hueso necesita más calcio, vitamina D y ejercicio
+     de fuerza.
+4. **Se te llama por el nombre y con tus pronombres**, siempre.
+
+La AND (Academy of Nutrition and Dietetics, 2024) recomienda exactamente
+esto: usar un **rango** entre los valores masculino y femenino cuando la
+cifra depende del sexo, y tratar siempre a la persona por su nombre y sus
+pronombres.
 
 El factor de actividad es la variable que más pesa (cambiar de nivel mueve
 270–600 kcal/día, más que la diferencia entre ecuaciones), así que se afina

@@ -46,7 +46,33 @@ RATES: dict[str, float] = {
 }
 GAIN_RATE = 0.25  # kg/semana al ganar masa
 
-MIN_KCAL = {"female": 1200, "male": 1500, "other": 1400}
+MIN_KCAL = {"female": 1200, "male": 1500, "midpoint": 1400, "other": 1400}
+
+# Hormonal: los valores que se usan para el suelo y la ecuacion.
+HORMONE_OPTIONS = {
+    "none": "sin tratamiento hormonal",
+    "estrogen": "estrogeno",
+    "testosterone": "testosterona",
+    "other": "otro tratamiento",
+}
+
+
+def physiology_reference(sex: str | None, hormone_therapy: str | None = None) -> str:
+    """Que referencia se usa para la ecuacion y el suelo de seguridad.
+
+    - Sin tratamiento hormonal: la referencia del perfil (la que corresponde
+      al cuerpo).
+    - Con estrogeno o testosterona: el **punto medio** de las referencias.
+      No hay ecuaciones especificas para personas trans: lo que manda es la
+      composicion corporal actual (Katch-McArdle, que no necesita el sexo) y,
+      sin ella, el punto medio es lo mas cercano a la realidad (Frenser &
+      Fischer, Int J Obes 2025; Adv Nutr 2025).
+    """
+    hormones = (hormone_therapy or "").strip().lower()
+    if hormones in {"estrogen", "estrogeno", "testosterone", "testosterona"}:
+        return "midpoint"
+    value = (sex or "").strip().lower()
+    return value if value in {"male", "female"} else "midpoint"
 
 # --- Refinamiento del mantenimiento (TDEE) ---------------------------------
 # El factor de actividad es la variable mas influyente (cambiar de nivel
@@ -138,6 +164,7 @@ def compute_bmr_detail(
     height_cm: float,
     age: int,
     body_fat_pct: float | None = None,
+    reference: str | None = None,
 ) -> tuple[float, str]:
     """(BMR, ecuacion usada).
 
@@ -146,12 +173,13 @@ def compute_bmr_detail(
     una bascula digital, que se equivoca 4-8 puntos) se usa Mifflin-St Jeor.
     """
     fat = float(body_fat_pct or 0.0)
-    # Rangos plausibles por sexo: fuera de ellos el dato es ruido y es mejor
-    # fiarse de Mifflin-St Jeor.
-    sex_key = (sex or "other").lower()
+    # Rangos plausibles por referencia: fuera de ellos el dato es ruido y es
+    # mejor fiarse de Mifflin-St Jeor.
+    sex_key = reference or (sex or "other").lower()
     plausible = {
         "male": (5.0, 45.0),
         "female": (8.0, 55.0),
+        "midpoint": (5.0, 50.0),
         "other": (5.0, 50.0),
     }.get(sex_key, (5.0, 50.0))
     if plausible[0] <= fat <= plausible[1]:
@@ -159,12 +187,12 @@ def compute_bmr_detail(
         return 370.0 + 21.6 * lean_mass, "Katch-McArdle (masa libre)"
 
     base = 10.0 * weight_kg + 6.25 * height_cm - 5.0 * age
-    sex = (sex or "other").lower()
+    sex = reference or (sex or "other").lower()
     if sex == "male":
         return base + 5.0, "Mifflin-St Jeor"
     if sex == "female":
         return base - 161.0, "Mifflin-St Jeor"
-    return base - 78.0, "Mifflin-St Jeor"  # punto medio
+    return base - 78.0, "Mifflin-St Jeor"  # punto medio entre ambos
 
 
 def compute_tdee(bmr: float, activity: str) -> float:
@@ -280,6 +308,7 @@ def build_target(
     job_activity: str | None = None,
     maintenance_override: int | None = None,
     calibrated_maintenance: int | None = None,
+    hormone_therapy: str | None = None,
 ) -> EnergyTarget:
     """Calcula el objetivo completo con las salvaguardas aplicadas.
 
@@ -289,13 +318,17 @@ def build_target(
     quitar son 7.000 kcal de ahorro repartidas entre los dias.
     """
     notes: list[str] = []
-    bmr, bmr_formula = compute_bmr_detail(sex, weight_kg, height_cm, age, body_fat_pct)
+    reference = physiology_reference(sex, hormone_therapy)
+    bmr, bmr_formula = compute_bmr_detail(
+        sex, weight_kg, height_cm, age, body_fat_pct, reference=reference
+    )
     tdee, breakdown = compute_tdee_detail(
         bmr, activity, training_days, daily_steps, job_activity
     )
     breakdown["bmr_formula"] = bmr_formula
+    breakdown["reference"] = reference
     goal = (goal or "maintain").lower()
-    floor = MIN_KCAL.get((sex or "other").lower(), 1400)
+    floor = MIN_KCAL.get(reference, 1400)
 
     # --- El mantenimiento: override manual > calibrado con datos > formula.
     maintenance = int(round(tdee))

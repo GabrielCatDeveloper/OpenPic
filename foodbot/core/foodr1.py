@@ -530,6 +530,20 @@ class FoodR1Client:
         Mantiene la coherencia entre ingredientes y TOTAL calórico, igual que
         hace el modelo real (que razona ingrediente a ingrediente).
         """
+        # El modo mock tambien sirve para el plan y el consejo: se responde
+        # con el formato que espera cada uno.
+        if "Dame 3-5 consejos" in prompt or "consejos practicos" in prompt:
+            return (
+                "- Reparte la proteina entre las tres comidas principales.\n"
+                "- Bebe agua antes de comer: a veces lo que parece hambre es sed.\n"
+                "- Camina 15 minutos despues de comer."
+            )
+        if "Propone un plan de comida" in prompt:
+            return (
+                "- COMIDA: Ensalada de garbanzos con atun | 480 kcal | P 32 g | C 45 g | G 18 g\n"
+                "- COMIDA: Merluza al horno con patata | 520 kcal | P 38 g | C 55 g | G 14 g\n"
+                "Consejo: lleva algo de fruta por la tarde."
+            )
         return (
             "<answer>The dish is Arroz con pollo y verduras, and has 6 ingredients in total. "
             "They are: 120g of rice, 150g of chicken breast, 100g of tomato, "

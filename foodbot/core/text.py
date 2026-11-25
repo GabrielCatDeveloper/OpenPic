@@ -206,6 +206,40 @@ def accumulated_line(data: dict[str, Any]) -> str:
     )
 
 
+def model_bullets(text: str, limit: int = 5) -> list[str]:
+    """Convierte la respuesta del modelo en vinetas limpias.
+
+    Food-R1 se pasa de largo con el formato (devuelve mas lineas de las
+    pedidas y usa markdown), asi que se limpia el markdown y se recorta.
+    """
+    bullets: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.replace("**", "").replace("__", "").strip()
+        if line.startswith(("- ", "* ", "\u2022 ")):
+            line = line[2:].strip()
+        if not line:
+            continue
+        bullets.append(line)
+    return bullets[:limit]
+
+
+def advice_message(specific: list[str], model_text: str = "") -> str:
+    """El consejo: primero lo especifico (con evidencia), despues el modelo."""
+    lines = ["<b>\U0001f4a1 Consejo de hoy</b>"]
+    if specific:
+        lines.append("\n".join(f"\u2022 {esc(tip)}" for tip in specific))
+    bullets = model_bullets(model_text)
+    if bullets:
+        lines.append("<b>\U0001f4ac Del modelo</b>")
+        lines.append("\n".join(f"\u2022 {esc(bullet)}" for bullet in bullets))
+    if not specific and not bullets:
+        lines.append("<i>No tengo nada especial que decirte hoy.</i>")
+    return "\n".join(lines)
+
+
 def weekly_message(summary: dict[str, Any]) -> str:
     """Mensaje completo de la semana: presupuesto, margen y dia a dia."""
     target = summary.get("target")

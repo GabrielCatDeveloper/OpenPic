@@ -55,8 +55,10 @@ from foodbot.core.nutrition import (
     estimate_body_fat_pct,
 )
 from foodbot.core.privacy import PhotoStore, erase_user_data, storage_report
+from foodbot.core.advice import specific_tips
 from foodbot.core.text import (
     accumulated_message,
+    advice_message,
     analysis_message,
     esc,
     goal_label,
@@ -79,6 +81,8 @@ log = logging.getLogger("foodbot.public")
 (
     NAME,
     SEX,
+    HORMONES,
+    PRONOUNS,
     AGE,
     HEIGHT,
     WEIGHT,
@@ -89,7 +93,13 @@ log = logging.getLogger("foodbot.public")
     ACTIVITY,
     GOAL,
     TARGET_WEIGHT,
-) = range(12)
+) = range(14)
+
+PRONOUN_LABELS = {
+    "male": "él",
+    "female": "ella",
+    "neutral": "en otro modo",
+}
 
 JOB_LABELS = {
     "sedentary": "De pie, poco movimiento",
@@ -101,7 +111,26 @@ JOB_LABELS = {
 # como se responde: texto libre o boton.
 PROFILE_QUESTIONS: dict[str, tuple[str, str]] = {
     "name": ("<b>\u00bfC\u00f3mo te llamas?</b>\n<i>Escribe tu nombre o el apodo que prefieras.</i>", "text"),
-    "sex": ("<b>\u00bfCu\u00e1l es tu sexo?</b>\n<i>Lo necesito para calcular tu metabolismo.</i>", "sex"),
+    "sex": (
+        "<b>\u00bfCu\u00e1l es tu sexo?</b>\n"
+        "<i>Solo lo uso para la ecuaci\u00f3n del metabolismo (el resto de "
+        "c\u00e1lculo va con tu peso, tu edad y tu composici\u00f3n corporal). "
+        "Si prefieres, elige <b>Otro</b>.</i>",
+        "sex",
+    ),
+    "hormones": (
+        "<b>\u00bfSigues alg\u00fan tratamiento hormonal?</b>\n"
+        "<i>Cambia el metabolismo y la composici\u00f3n corporal, asi que lo "
+        "tengo en cuenta para afinar tus n\u00fameros y tu consejo. Es "
+        "opcional.</i>",
+        "hormones",
+    ),
+    "pronouns": (
+        "<b>\u00bfC\u00f3mo prefieres que te llame?</b>\n"
+        "<i>Solo para darte el consejo que corresponde (hierro, calcio, "
+        "prote\u00edna\u2026). Puedes saltarlo.</i>",
+        "pronouns",
+    ),
     "age": ("<b>\u00bfCu\u00e1l es tu edad?</b>\n<i>Solo el n\u00famero.</i>", "text"),
     "height": ("<b>\u00bfCu\u00e1l es tu altura en cm?</b>\n<i>Ejemplo: <code>175</code></i>", "text"),
     "weight": ("<b>\u00bfCu\u00e1l es tu peso actual en kg?</b>\n<i>Ejemplo: <code>78.4</code></i>", "text"),
@@ -145,6 +174,8 @@ PROFILE_QUESTIONS: dict[str, tuple[str, str]] = {
 PROFILE_STEPS: dict[str, int] = {
     "name": NAME,
     "sex": SEX,
+    "hormones": HORMONES,
+    "pronouns": PRONOUNS,
     "age": AGE,
     "height": HEIGHT,
     "weight": WEIGHT,
@@ -218,6 +249,40 @@ def bodyfat_keyboard() -> InlineKeyboardMarkup:
                     "Usar estimado", callback_data="perfil:bodyfat:estimate"
                 ),
             ]
+        ]
+    )
+
+
+def hormone_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Ninguno", callback_data="perfil:hormone:none"),
+                InlineKeyboardButton("Estrógenos", callback_data="perfil:hormone:estrogen"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "Testosterona", callback_data="perfil:hormone:testosterone"
+                ),
+                InlineKeyboardButton("Otro", callback_data="perfil:hormone:other"),
+            ],
+            [InlineKeyboardButton("\u21e9 Saltar", callback_data="perfil:skip:pronouns")],
+        ]
+    )
+
+
+def pronoun_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("\u00c9l", callback_data="perfil:pronoun:male"),
+                InlineKeyboardButton("Ella", callback_data="perfil:pronoun:female"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "En otro modo", callback_data="perfil:pronoun:neutral"
+                ),
+                InlineKeyboardButton("\u21e9 Saltar", callback_data="perfil:skip:age")],
         ]
     )
 
@@ -1769,27 +1834,41 @@ class PublicBot:
         await self._send_advice(update)
 
     async def _send_advice(self, update: Update) -> None:
+        """El consejo: lo especifico (con evidencia) y el del modelo.
+
+        Los consejos especificos son deterministas: dependen del perfil
+        (hormonas, pronombres, sexo, objetivo) y no del modelo, que es un
+        modelo de calorias y no un dietista. El modelo aporta los tips
+        genericos, que van detras.
+        """
         user = update.effective_user
         profile = self.users.profile(user.id)
         target = self.users.daily_target(user.id)
         if not target:
             await update.effective_message.reply_text(
-                "⚙️ Completa tu perfil (<code>/perfil</code>) para recibir consejos personalizados.",
+                "\u2699\ufe0f Completa tu perfil (<code>/perfil</code>) para recibir consejos personalizados.",
                 parse_mode=ParseMode.HTML,
             )
             return
+
+        specific = specific_tips(profile, target)
         summary = self.users.today_summary(user.id)
         eaten = summary["calories"]
         cache_key = f"advice:{user.id}:{summary['day']}:{eaten}"
         cached = self.db.get_cache(cache_key)
-        header = "<b>💡 Consejo de hoy</b>\n"
+
         if cached:
-            await update.effective_message.reply_text(
-                header + esc(cached.strip()), parse_mode=ParseMode.HTML
+            await self._safe_send(
+                update,
+                advice_message(specific, cached),
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
             )
             return
 
-        status = await update.effective_message.reply_text("💡 Pensando un consejo…")
+        status = await update.effective_message.reply_text(
+            "\U0001f4a1 Pensando un consejo\u2026"
+        )
         try:
             text = await self.llm.make_advice(
                 profile=self.users.describe_profile(profile),
@@ -1801,10 +1880,20 @@ class PublicBot:
                 eaten=eaten,
             )
         except InferenceError as exc:
-            await status.edit_text(f"❌ No he podido generar el consejo: {esc(str(exc)[:200])}")
+            # Si el motor falla, el consejo especifico sigue sirviendo.
+            await status.edit_text(
+                advice_message(specific),
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
+            log.warning("Fallo al generar el consejo del modelo: %s", exc)
             return
         self.db.set_cache(cache_key, text.strip(), user_id=user.id)
-        await status.edit_text(header + esc(text.strip()), parse_mode=ParseMode.HTML)
+        await status.edit_text(
+            advice_message(specific, text),
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
+        )
 
     # -- privacidad --------------------------------------------------------
     async def cmd_privacy(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1920,6 +2009,16 @@ class PublicBot:
         lines.append(f"Pasos: {steps:,}/d\u00eda".replace(",", ".") if steps else "Pasos: sin definir")
         job = profile.get("job_activity")
         lines.append(f"Trabajo: {JOB_LABELS.get(str(job or ''), 'sin definir')}")
+        hormones = profile.get("hormone_therapy")
+        if hormones and hormones != "none":
+            from foodbot.core.nutrition import HORMONE_OPTIONS
+
+            lines.append(
+                f"Hormonas: {HORMONE_OPTIONS.get(str(hormones), str(hormones))}"
+            )
+        pronouns = profile.get("pronouns")
+        if pronouns:
+            lines.append(f"Pronombres: {PRONOUN_LABELS.get(str(pronouns), pronouns)}")
         activity = str(profile.get("activity") or "")
         lines.append(
             f"Actividad: {activity_label(activity)}" if activity else "Actividad: -"
@@ -1947,6 +2046,10 @@ class PublicBot:
             reply_markup = activity_keyboard()
         elif kind == "goal":
             reply_markup = goal_keyboard()
+        elif kind == "hormones":
+            reply_markup = hormone_keyboard()
+        elif kind == "pronouns":
+            reply_markup = pronoun_keyboard()
         elif kind == "bodyfat":
             reply_markup = bodyfat_keyboard()
         elif kind == "training":
@@ -1992,7 +2095,7 @@ class PublicBot:
         sex = query.data.split(":")[-1]
         self.users.update_profile(update.effective_user.id, sex=sex)
         await query.edit_message_text("✅ Guardado.", parse_mode=ParseMode.HTML)
-        return await self._ask(update, context, "age")
+        return await self._ask(update, context, "hormones")
 
     async def on_age(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         age = self._parse_number(update, update.effective_message.text or "")
@@ -2098,6 +2201,24 @@ class PublicBot:
         self.users.update_profile(update.effective_user.id, job_activity=job)
         await query.edit_message_text("✅ Guardado.", parse_mode=ParseMode.HTML)
         return await self._ask(update, context, "activity")
+
+    async def cb_hormone(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Tratamiento hormonal: cambia la referencia fisiologica."""
+        query = update.callback_query
+        await query.answer()
+        value = query.data.split(":")[-1]
+        self.users.update_profile(update.effective_user.id, hormone_therapy=value)
+        await query.edit_message_text("Guardado.", parse_mode=ParseMode.HTML)
+        return await self._ask(update, context, "pronouns")
+
+    async def cb_pronoun(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Como quieres que te llame: decide el marco del consejo."""
+        query = update.callback_query
+        await query.answer()
+        value = query.data.split(":")[-1]
+        self.users.update_profile(update.effective_user.id, pronouns=value)
+        await query.edit_message_text("Guardado.", parse_mode=ParseMode.HTML)
+        return await self._ask(update, context, "age")
 
     async def cb_activity(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
