@@ -152,6 +152,36 @@ CREATE TABLE IF NOT EXISTS weekly_savings (
 );
 CREATE INDEX IF NOT EXISTS idx_weekly_savings_user ON weekly_savings(user_id, week);
 
+-- Catalogo de productos: lo que el usuario nombra ("3 magdalenas del
+-- mercadona"). Con el peso de la porcion, el calculo es exacto.
+CREATE TABLE IF NOT EXISTS products (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER,
+    name          TEXT    NOT NULL,
+    brand         TEXT,
+    kcal_100g     REAL,
+    protein_100g  REAL,
+    carbs_100g    REAL,
+    fat_100g      REAL,
+    portion_g     REAL,              -- peso de una unidad (si se sabe)
+    portion_name  TEXT,
+    source        TEXT,              -- etiqueta | manual | estimado
+    created_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_products_user ON products(user_id, name);
+
+-- Como se ha dormido: la noche (hora de acostarse y de levantarse).
+CREATE TABLE IF NOT EXISTS sleep (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    day        TEXT    NOT NULL,      -- el dia local al que se atribuye
+    bedtime    TEXT    NOT NULL,      -- ISO en UTC
+    waketime   TEXT    NOT NULL,
+    hours      REAL    NOT NULL,
+    created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sleep_user ON sleep(user_id, bedtime DESC);
+
 -- Apodos que usa el administrador para autorizar a alguien sin recordar su
 -- id numerico de Telegram: 'laura' -> 123456789
 CREATE TABLE IF NOT EXISTS aliases (
@@ -366,6 +396,60 @@ class Database:
                 int(fields.get("maintenance") or 0),
                 fields.get("closed_at") or iso(),
             ],
+        )
+
+    # -- catalogo de productos ---------------------------------------------
+    def add_product(self, user_id: int | None, **fields: Any) -> int:
+        cur = self.execute(
+            "INSERT INTO products "
+            "(user_id, name, brand, kcal_100g, protein_100g, carbs_100g, fat_100g, "
+            " portion_g, portion_name, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                user_id,
+                str(fields.get("name") or "").strip().lower(),
+                (fields.get("brand") or None),
+                fields.get("kcal_100g"),
+                fields.get("protein_100g"),
+                fields.get("carbs_100g"),
+                fields.get("fat_100g"),
+                fields.get("portion_g"),
+                fields.get("portion_name"),
+                fields.get("source") or "manual",
+                iso(),
+            ],
+        )
+        return int(cur.lastrowid or 0)
+
+    def list_products(self, user_id: int) -> list[sqlite3.Row]:
+        """Los productos del usuario y los globales."""
+        return self.query(
+            "SELECT * FROM products WHERE user_id = ? OR user_id IS NULL ORDER BY name",
+            (user_id,),
+        )
+
+    def find_product_by_name(self, user_id: int, name: str) -> sqlite3.Row | None:
+        return self.query_one(
+            "SELECT * FROM products WHERE (user_id = ? OR user_id IS NULL) "
+            "AND name = ? LIMIT 1",
+            (user_id, name.strip().lower()),
+        )
+
+    # -- sueño ---------------------------------------------------------------
+    def add_sleep(
+        self, user_id: int, day: str, bedtime: str, waketime: str, hours: float
+    ) -> int:
+        cur = self.execute(
+            "INSERT INTO sleep (user_id, day, bedtime, waketime, hours, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, day, bedtime, waketime, hours, iso()),
+        )
+        return int(cur.lastrowid or 0)
+
+    def recent_sleep(self, user_id: int, limit: int = 14) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM sleep WHERE user_id = ? ORDER BY bedtime DESC LIMIT ?",
+            (user_id, int(limit)),
         )
 
     def list_week_savings(self, user_id: int) -> list[sqlite3.Row]:

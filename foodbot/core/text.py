@@ -9,6 +9,7 @@ from typing import Any, Sequence
 from foodbot.core.nutrition import EnergyTarget, GOALS
 from foodbot.core.timeutil import (
     SLOT_EMOJI,
+    SLOT_LABELS,
     UTC,
     format_local_time,
     friendly_day,
@@ -349,16 +350,30 @@ def macro_line(target: EnergyTarget | None) -> str:
 
 
 def meal_line(meal: dict[str, Any] | Any, tz: tzinfo = UTC) -> str:
-    """Una linea resumida de una comida, en hora local."""
+    """Una linea resumida de una comida, en hora local.
+
+    La franja es la que el usuario ha elegido; si no la ha corregido, se
+    deduce de la hora.
+    """
     hour = format_local_time(meal["eaten_at"], tz)
-    slot = meal_slot(None, tz) if not meal["eaten_at"] else meal_slot(
-        _as_dt(meal["eaten_at"]), tz
-    )
+    slot = None
+    try:
+        slot = meal["meal_slot"]
+    except (KeyError, TypeError, IndexError):
+        slot = None
+    if not slot:
+        slot = (
+            meal_slot(None, tz)
+            if not meal["eaten_at"]
+            else meal_slot(_as_dt(meal["eaten_at"]), tz)
+        )
     emoji = SLOT_EMOJI.get(slot, "🍽")
+    label = SLOT_LABELS.get(slot, "")
     dish = esc(meal["dish"] or "Plato")
     kcal = int(meal["calories"] or 0)
     edited = " ✏️" if int(meal["edited"] or 0) else ""
-    return f"{emoji} <code>{hour}</code> {dish} — <b>{kcal} kcal</b>{edited}"
+    suffix = f" · {label}" if label else ""
+    return f"{emoji} <code>{hour}</code>{suffix} {dish} — <b>{kcal} kcal</b>{edited}"
 
 
 def _as_dt(value: Any):

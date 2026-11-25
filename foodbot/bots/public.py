@@ -17,6 +17,7 @@ Reglas de privacidad que aplica este modulo:
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import io
 import logging
@@ -57,6 +58,20 @@ from foodbot.core.nutrition import (
 from foodbot.core.privacy import PhotoStore, erase_user_data, storage_report
 from foodbot.core.advice import specific_tips
 from foodbot.core.feedback import meal_feedback
+from foodbot.core.label import (
+    LABEL_PROMPT,
+    LABEL_SYSTEM,
+    WEIGHT_PROMPT,
+    label_to_portion,
+    parse_label,
+    parse_weight,
+)
+from foodbot.core.products import describe, find_product, parse_request
+from foodbot.core.sleep import (
+    SleepNight,
+    late_snack_explanation,
+    sleep_summary,
+)
 from foodbot.core.stickers import sticker_for
 from foodbot.core.text import (
     accumulated_message,
@@ -499,6 +514,20 @@ def history_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def slot_keyboard(meal_id: int) -> InlineKeyboardMarkup:
+    """Elegir a que franja pertenece la comida."""
+    from foodbot.core.timeutil import SLOT_LABELS
+
+    buttons = [
+        InlineKeyboardButton(
+            SLOT_LABELS[slot], callback_data=f"slot:{meal_id}:{slot}"
+        )
+        for slot in SLOT_LABELS
+    ]
+    rows = [buttons[:2], buttons[2:4], buttons[4:6], buttons[6:]]
+    return InlineKeyboardMarkup([row for row in rows if row])
+
+
 def meal_actions_keyboard(meal_id: int, can_retry: bool = True) -> InlineKeyboardMarkup:
     """Botones sobre el resultado de un analisis: corregir, reanalizar, borrar."""
     row = [
@@ -510,11 +539,26 @@ def meal_actions_keyboard(meal_id: int, can_retry: bool = True) -> InlineKeyboar
         [
             row,
             [
+                InlineKeyboardButton("🕐 ¿Qué comida es?", callback_data=f"slot:{meal_id}"),
+                InlineKeyboardButton("🏷️ Producto con etiqueta", callback_data=f"etiqueta:{meal_id}"),
+            ],
+            [
                 InlineKeyboardButton("🗑 Borrar", callback_data=f"borrar:{meal_id}"),
                 InlineKeyboardButton("📊 Ver mi día", callback_data="menu:resumen"),
             ],
         ]
     )
+
+
+class _EmptyLabel:
+    """Etiqueta vacia (cuando el producto no venia de una etiqueta)."""
+
+    kcal_100g = None
+    protein_100g = None
+    carbs_100g = None
+    fat_100g = None
+    net_weight_g = None
+    serving_g = None
 
 
 class PublicBot:
@@ -655,6 +699,7 @@ class PublicBot:
         self.app.add_handler(CommandHandler("resumen", self.cmd_hoy))
         self.app.add_handler(CommandHandler("semana", self.cmd_semana))
         self.app.add_handler(CommandHandler("objetivo", self.cmd_objetivo))
+        self.app.add_handler(CommandHandler("dormir", self.cmd_sleep))
         self.app.add_handler(CommandHandler("historial", self.cmd_historial))
         self.app.add_handler(CommandHandler("peso", self.cmd_peso))
         self.app.add_handler(CommandHandler("meta", self.cmd_meta))
@@ -672,6 +717,14 @@ class PublicBot:
             CallbackQueryHandler(self.cb_register_weight, pattern=r"^peso:registrar$")
         )
         self.app.add_handler(CallbackQueryHandler(self.cb_objetivo, pattern=r"^objetivo:"))
+        self.app.add_handler(CallbackQueryHandler(self.cb_meal_slot, pattern=r"^slot:"))
+        self.app.add_handler(CallbackQueryHandler(self.cb_product, pattern=r"^producto:"))
+        self.app.add_handler(
+            CallbackQueryHandler(self.cb_label_confirm, pattern=r"^etiqueta:(si|no)$")
+        )
+        self.app.add_handler(
+            CallbackQueryHandler(self.cb_label, pattern=r"^etiqueta:\d+$")
+        )
         self.app.add_handler(CallbackQueryHandler(self.cb_delete_meal, pattern=r"^borrar:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_correct, pattern=r"^corregir:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_retry, pattern=r"^reintentar:"))
@@ -898,6 +951,20 @@ class PublicBot:
         if not user or not message:
             return
 
+        # Si estaba esperando la etiqueta de un producto, esta foto no es una
+        # comida: es la etiqueta.
+        pending_label = context.user_data.pop("await_label", None)
+        if pending_label:
+            try:
+                await self._read_label(update, context, int(pending_label))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Fallo leyendo la etiqueta: %s", exc)
+                await message.reply_text(
+                    "No he podido procesar la etiqueta. Inténtalo otra vez.",
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+
         allowed, reason = self._check_photo_quota(user.id)
         if not allowed:
             await message.reply_text(f"⏳ {esc(reason)}", parse_mode=ParseMode.HTML)
@@ -1057,11 +1124,18 @@ class PublicBot:
             await self._menu_action(update, action)
             return
 
-        # 4) ¿El usuario está activo?
+        # 4) ¿Es un producto del catalogo? ("3 magdalenas del mercadona")
         if self._authorized(update):
+            request = parse_request(text)
+            if request:
+                match = self._find_product(update.effective_user.id, request)
+                if match:
+                    await self._propose_product(update, context, request, match)
+                    return
             await update.effective_message.reply_text(
                 "👋 Usa el menú de abajo. <i>Para analizar una comida, "
-                "envía una foto.</i>",
+                "envía una foto, o dime el producto: "
+                "<code>3 magdalenas del mercadona</code>.</i>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=main_reply_keyboard(),
             )
@@ -1739,6 +1813,25 @@ class PublicBot:
         if not await self._require_auth(update):
             return
         raw = " ".join(context.args or [])
+
+        # Sin barras: puede ser un producto del catalogo ("3 magdalenas del
+        # mercadona"), que se calcula con la etiqueta y el peso de la porcion.
+        if "|" not in raw:
+            request = parse_request(raw)
+            if request:
+                match = self._find_product(update.effective_user.id, request)
+                if match:
+                    await self._propose_product(update, context, request, match)
+                    return
+                await self._offer_new_product(update, context, request)
+                return
+            await update.effective_message.reply_text(
+                "Uso: <code>/anotar nombre del plato | kcal</code>\n"
+                "<i>O dime el producto tal cual: <code>3 magdalenas del mercadona</code> "
+                "(si lo tengo en el catalogo, te calculo las kcal).</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
         if "|" not in raw:
             await update.effective_message.reply_text(
                 "Uso: <code>/anotar nombre del plato | kcal</code>", parse_mode=ParseMode.HTML
@@ -1850,6 +1943,468 @@ class PublicBot:
             document=buffer.getvalue().encode("utf-8"),
             filename="historial_nutrition.csv",
             caption="📤 Tu historial de comidas (últimos 90 días).",
+        )
+
+    # -- sueño ---------------------------------------------------------------
+    async def cmd_sleep(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Registrar y ver como se duerme.
+
+        El sueño manda sobre el hambre: dormir poco sube la ingesta (mas de
+        250 kcal/dia segun Nature Reviews Endocrinology, 2022) y alargar el
+        sueño 1,2 h la bajo unos 270 kcal (Tasali et al., JAMA Intern Med
+        2022). Por eso se apunta: para entender los picuelos de madrugada.
+        """
+        if not await self._require_auth(update):
+            return
+        user = update.effective_user
+        text = " ".join(context.args or []).strip()
+
+        if not text:
+            await self._send_sleep(update)
+            return
+
+        parsed = self._parse_sleep_times(text)
+        if not parsed:
+            await update.effective_message.reply_text(
+                "No he entendido las horas. Escr\u00edbeme por ejemplo "
+                "<code>23:30 - 07:15</code> (o <code>23:30 7:15</code>).",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        bedtime, waketime = parsed
+        now = utcnow()
+        hours = (waketime - bedtime).total_seconds() / 3600.0
+        if hours <= 0:
+            hours += 24
+        if not (0 < hours <= 16):
+            await update.effective_message.reply_text(
+                "Eso no puede ser una noche. \u00bfTe acostaste a las "
+                f"{bedtime.strftime('%H:%M')} y te levantaste a las "
+                f"{waketime.strftime('%H:%M')}?",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        day = local_now(self.users.tz).strftime("%Y-%m-%d")
+        self.db.add_sleep(
+            user.id, day, iso(bedtime), iso(waketime), round(hours, 2)
+        )
+        await update.effective_message.reply_text(
+            f"\U0001f634 Apuntado: <b>{hours:.1f} h</b> de sueño "
+            f"({bedtime.strftime('%H:%M')} \u2192 {waketime.strftime('%H:%M')}).",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
+        )
+
+    def _parse_sleep_times(self, text: str):
+        """'23:30 - 07:15' -> (datetime, datetime)."""
+        import re
+        from datetime import datetime, timedelta
+
+        found = re.findall(r"(\d{1,2})[:.h]?(\d{2})?", text)
+        if len(found) < 2:
+            return None
+        try:
+            h1, m1 = int(found[0][0]), int(found[0][1] or 0)
+            h2, m2 = int(found[1][0]), int(found[1][1] or 0)
+        except ValueError:
+            return None
+        if not (0 <= h1 <= 23 and 0 <= h2 <= 23 and 0 <= m1 <= 59 and 0 <= m2 <= 59):
+            return None
+        now = datetime.now()
+        bedtime = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
+        waketime = now.replace(hour=h2, minute=m2, second=0, microsecond=0)
+        if waketime <= bedtime:
+            waketime += timedelta(days=1)
+        return bedtime, waketime
+
+    def _sleep_nights(self, user_id: int, limit: int = 14) -> list[SleepNight]:
+        """Las ultimas noches registradas (en hora local)."""
+        nights: list[SleepNight] = []
+        for row in self.db.recent_sleep(user_id, limit):
+            try:
+                from foodbot.core.nutrition import parse_iso
+
+                bedtime = parse_iso(row["bedtime"]).astimezone(self.users.tz)
+                waketime = parse_iso(row["waketime"]).astimezone(self.users.tz)
+            except (KeyError, ValueError):
+                continue
+            nights.append(SleepNight(bedtime=bedtime, waketime=waketime))
+        return nights
+
+    async def _send_sleep(self, update: Update) -> None:
+        """Como se duerme: media, regularidad y que dice de la comida."""
+        user = update.effective_user
+        nights = self._sleep_nights(user.id)
+        summary = sleep_summary(nights)
+        lines = ["<b>\U0001f634 Tu sueño</b>"]
+
+        if not summary["nights"]:
+            lines.append(
+                "Todavía no has registrado ninguna noche. \U0001f4d3 "
+                "<code>/dormir 23:30 - 07:15</code>"
+            )
+        else:
+            lines.append(
+                f"Últimas {summary['nights']} noches: <b>{summary['avg_hours']:.1f} h</b> "
+                f"de media ({summary['quality']})."
+            )
+            if summary["short"]:
+                lines.append(
+                    "\U0001f6f1 Con menos de 6 h, la ingesta sube de media unos 250 "
+                    "kcal al día (Nature Reviews Endocrinology, 2022). No es que "
+                    "te falte fuerza de voluntad: es el sueño."
+                )
+            if summary["irregular"]:
+                lines.append(
+                    f"Tu hora de acostarte varía \u00b1{summary['regularity']:.1f} h. La "
+                    "regularidad importa tanto como la cantidad: el cuerpo "
+                    "funciona por reloj."
+                )
+            else:
+                lines.append("\u2705 Horario bastante regular.")
+
+        explanation = None
+        try:
+            summary_today = self.users.today_summary(user.id)
+            explanation = late_snack_explanation(
+                summary_today.get("meals") or [], nights, self.users.tz
+            )
+        except Exception:  # noqa: BLE001
+            explanation = None
+        if explanation:
+            lines.append(f"\n{explanation}")
+
+        lines.append(
+            "\n<i>Apunta la noche con <code>/dormir 23:30 - 07:15</code>. "
+            "Con dos semanas te digo si tu horario es el problema.</i>"
+        )
+        await self._safe_send(
+            update, "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=main_menu()
+        )
+
+    # -- catalogo de productos ----------------------------------------------
+    def _find_product(self, user_id: int, request):
+        """Busca el producto: primero los del usuario, luego la tabla."""
+        rows = [dict(row) for row in self.db.list_products(user_id)]
+        return find_product(request, rows)
+
+    async def _propose_product(self, update, context, request, match) -> None:
+        """Muestra el calculo del producto y pide confirmacion."""
+        info = describe(match, request)
+        from foodbot.core.products import estimate_weight
+
+        if not info["grams"]:
+            weight = estimate_weight(request)
+            if weight:
+                info = describe(match, request)
+                info["grams"] = round(weight * request.quantity, 1)
+                info["calories"] = round(match.kcal_100g * info["grams"] / 100.0)
+                info["protein_g"] = round(match.protein_100g * info["grams"] / 100.0, 1)
+                info["carbs_g"] = round(match.carbs_100g * info["grams"] / 100.0, 1)
+                info["fat_g"] = round(match.fat_100g * info["grams"] / 100.0, 1)
+                info["exact"] = True
+
+        context.user_data["pending_product"] = {
+            "name": match.name,
+            "brand": match.brand,
+            "quantity": request.quantity,
+            "grams": info["grams"],
+            "calories": info["calories"],
+            "protein_g": info["protein_g"],
+            "carbs_g": info["carbs_g"],
+            "fat_g": info["fat_g"],
+        }
+        brand = f" de {match.brand}" if match.brand else ""
+        where = "tu etiqueta" if match.source == "producto" else "la tabla"
+        text = (
+            f"\U0001f9ea <b>{request.quantity:g} x {match.name}{brand}</b>\n"
+            f"Con la informacion de {where}: "
+            + (
+                f"<b>{info['grams']:.0f} g</b> en total -> <b>{info['calories']} kcal</b>"
+                if info["grams"]
+                else f"~<b>{info['calories']} kcal</b> (peso estimado)"
+            )
+            + "\n"
+            f"\U0001f9c1 P {info['protein_g']} g \u00b7 \U0001f35a C {info['carbs_g']} g "
+            f"\u00b7 \U0001f951 G {info['fat_g']} g\n\n"
+            "<i>\u00bfLo anoto?</i>"
+        )
+        await self._safe_send(
+            update,
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("\u2705 S\u00ed, an\u00f3talo", callback_data="producto:si"),
+                        InlineKeyboardButton("\u274c Cancelar", callback_data="producto:no"),
+                    ]
+                ]
+            ),
+        )
+
+    async def _offer_new_product(self, update, context, request) -> None:
+        """No conozco el producto: le pido la etiqueta y lo doy de alta."""
+        context.user_data["pending_new_product"] = {
+            "name": request.name,
+            "brand": request.brand,
+        }
+        await self._safe_send(
+            update,
+            f"\U0001f9ea No tengo <b>{esc(request.name)}</b> en el catalogo.\n\n"
+            "M\u00e1ndame una foto de la etiqueta (la de informaci\u00f3n nutricional) y "
+            "el peso, y lo doy de alta: la pr\u00f3xima vez te saldr\u00e1 al "
+            "instante.\n\n"
+            "<i>Si no tienes la etiqueta, dime las kcal por 100 g y el peso de una "
+            "unidad.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    async def cb_product(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Confirma el producto del catalogo y lo guarda."""
+        query = update.callback_query
+        await query.answer()
+        action = query.data.split(":")[-1]
+        pending = context.user_data.pop("pending_product", None)
+        if action != "si" or not pending:
+            await self._safe_send(update, "Vale, no lo anoto.", parse_mode=ParseMode.HTML)
+            return
+
+        user = update.effective_user
+        now = utcnow()
+        dish = f"{pending['quantity']:g} x {pending['name']}"
+        if pending.get("brand"):
+            dish += f" de {pending['brand']}"
+        self.db.add_meal(
+            user_id=user.id,
+            created_at=iso(now),
+            eaten_at=iso(now),
+            meal_slot=self._slot_for(now),
+            dish=dish[:120],
+            calories=int(pending["calories"]),
+            protein_g=float(pending["protein_g"]),
+            carbs_g=float(pending["carbs_g"]),
+            fat_g=float(pending["fat_g"]),
+            mass_g=pending.get("grams") or 0,
+            ingredients="[]",
+            raw_answer="",
+            confidence=1.0,
+            engine="catalogo",
+        )
+        await self._safe_send(
+            update,
+            f"\u2705 Anotado: <b>{esc(dish)}</b> — {int(pending['calories'])} kcal",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
+        )
+
+    # -- franja de la comida ------------------------------------------------
+    async def cb_meal_slot(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Elegir (o corregir) a que franja pertenece la comida."""
+        query = update.callback_query
+        await query.answer()
+        parts = query.data.split(":")
+        try:
+            meal_id = int(parts[1])
+        except (IndexError, ValueError):
+            return
+
+        if len(parts) > 2 and parts[2]:
+            slot = parts[2]
+            from foodbot.core.timeutil import SLOT_LABELS
+
+            ok = self.db.update_meal(update.effective_user.id, meal_id, meal_slot=slot)
+            if ok:
+                await self._safe_send(
+                    update,
+                    f"\u2705 Anotado como <b>{SLOT_LABELS.get(slot, slot)}</b>.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=main_menu(),
+                )
+            else:
+                await self._safe_send(
+                    update, "No he podido cambiar esa comida.", parse_mode=ParseMode.HTML
+                )
+            return
+
+        await self._safe_send(
+            update,
+            "\U0001f550 \u00bfA qu\u00e9 comida es?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=slot_keyboard(meal_id),
+        )
+
+    # -- etiqueta de un producto envasado ------------------------------------
+    async def cb_label(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Pide la etiqueta y el peso para afinar las calorias."""
+        query = update.callback_query
+        await query.answer()
+        parts = query.data.split(":")
+        try:
+            meal_id = int(parts[1])
+        except (IndexError, ValueError):
+            return
+        context.user_data["await_label"] = meal_id
+        await self._safe_send(
+            update,
+            "\U0001f3d7\ufe0f <b>M\u00e1ndame una foto de la etiqueta</b> "
+            "(la de Informaci\u00f3n nutricional) y el peso del producto.\n\n"
+            "<i>En el pie de la foto escribe el peso: <code>250 g</code>. Con la "
+            "etiqueta y el peso, las calor\u00edas son exactas. Yo leo lo que pone "
+            "y te lo confirmo antes de guardarlo.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    async def _read_label(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, meal_id: int
+    ) -> None:
+        """Transcribe la etiqueta, calcula la porcion y pide confirmacion."""
+        user = update.effective_user
+        message = update.effective_message
+        _file_id, data = await self._download_photo(message)
+        mime = sniff_mime(data)
+        image_b64 = base64.b64encode(data).decode("ascii")
+
+        note = (message.caption or "").strip()
+        weight = None
+        import re
+
+        match = re.search(r"(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)?", note, re.I)
+        if match:
+            weight = float(match.group(1).replace(",", "."))
+            if (match.group(2) or "g").lower() in {"kg", "l"}:
+                weight *= 1000
+
+        status = await message.reply_text("\U0001f50d Leyendo la etiqueta\u2026")
+        try:
+            raw = await self.llm.complete(
+                LABEL_SYSTEM,
+                LABEL_PROMPT,
+                image_b64,
+                mime,
+                max_tokens=160,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await status.edit_text(
+                f"No he podido leer la etiqueta: {esc(str(exc)[:150])}", parse_mode=ParseMode.HTML
+            )
+            return
+
+        label = parse_label(raw)
+        if not label.has_values:
+            await status.edit_text(
+                "No he_distinguido los valores de la etiqueta. Escr\u00edbeme las "
+                "calor\u00edas por 100 g y el peso, y lo calculo.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        if weight is None:
+            weight = label.net_weight_g
+        if weight is None:
+            # El peso no estaba en la etiqueta: se estima desde el envase.
+            try:
+                estimate = await self.llm.complete(
+                    LABEL_SYSTEM,
+                    WEIGHT_PROMPT,
+                    image_b64,
+                    mime,
+                    max_tokens=40,
+                )
+            except Exception:  # noqa: BLE001
+                estimate = ""
+            weight = parse_weight(estimate)
+
+        if not weight:
+            await status.edit_text(
+                "Necesito el peso: escr\u00edbeme los gramos (ej. <code>250 g</code>) "
+                "y hago la cuenta.",
+                parse_mode=ParseMode.HTML,
+            )
+            context.user_data["await_label_weight"] = meal_id
+            return
+
+        portion = label_to_portion(label, weight)
+        context.user_data["pending_portion"] = {
+            "meal_id": meal_id,
+            "weight_g": weight,
+            "label_data": label,
+            **portion,
+        }
+        await status.edit_text(
+            "\U0001f3d7\ufe0f Leo en la etiqueta: <b>"
+            f"{int(label.kcal_100g or 0)} kcal/100 g</b>\n"
+            f"Con <b>{int(weight)} g</b> son <b>{portion['calories']} kcal</b>\n"
+            f"\U0001f9c1 P {portion['protein_g']} g \u00b7 \U0001f35a C {portion['carbs_g']} g "
+            f"\u00b7 \U0001f951 G {portion['fat_g']} g\n\n"
+            "<i>\u00bfLo guardo as\u00ed?</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "\u2705 S\u00ed, gu\u00e1rdalo", callback_data="etiqueta:si"
+                        ),
+                        InlineKeyboardButton("\u274c Cancelar", callback_data="etiqueta:no"),
+                    ]
+                ]
+            ),
+        )
+
+    async def cb_label_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Confirma el calculo hecho con la etiqueta."""
+        query = update.callback_query
+        await query.answer()
+        action = query.data.split(":")[-1]
+        pending = context.user_data.pop("pending_portion", None)
+        if action != "si" or not pending:
+            await self._safe_send(update, "Vale, lo dejo como estaba.", parse_mode=ParseMode.HTML)
+            return
+        user = update.effective_user
+        meal_id = int(pending.get("meal_id") or 0)
+        self.db.update_meal(
+            user.id,
+            meal_id,
+            calories=int(pending.get("calories") or 0),
+            protein_g=float(pending.get("protein_g") or 0),
+            carbs_g=float(pending.get("carbs_g") or 0),
+            fat_g=float(pending.get("fat_g") or 0),
+        )
+
+        # El producto queda en el catalogo del usuario: la proxima vez que lo
+        # nombre, sale al instante y sin pedir nada.
+        new_product = context.user_data.pop("pending_new_product", None)
+        if new_product is None:
+            # Venia del boton de etiqueta: el nombre es el del plato.
+            meal = self.db.get_meal(user.id, meal_id)
+            if meal and meal["dish"]:
+                dish = str(meal["dish"]).strip()
+                # "3 x magdalenas" -> "magdalenas"
+                if " x " in dish:
+                    dish = dish.split(" x ", 1)[1]
+                new_product = {"name": dish, "brand": None}
+        if new_product and pending.get("weight_g"):
+            weight = float(pending.get("weight_g"))
+            portion = label_to_portion(pending.get("label_data") or _EmptyLabel(), weight)
+            self.db.add_product(
+                user.id,
+                name=str(new_product.get("name") or ""),
+                brand=new_product.get("brand"),
+                kcal_100g=(portion["calories"] / weight * 100) if weight else None,
+                protein_100g=(portion["protein_g"] / weight * 100) if weight else None,
+                carbs_100g=(portion["carbs_g"] / weight * 100) if weight else None,
+                fat_100g=(portion["fat_g"] / weight * 100) if weight else None,
+                portion_g=weight,
+                source="etiqueta",
+            )
+        await self._safe_send(
+            update,
+            f"\u2705 Guardado: <b>{int(pending.get('calories') or 0)} kcal</b> "
+            f"({int(pending.get('weight_g') or 0)} g de etiqueta).",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
         )
 
     # -- como va el dia (sticker) ------------------------------------------

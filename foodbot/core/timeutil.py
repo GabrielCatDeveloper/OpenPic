@@ -17,22 +17,42 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 UTC = timezone.utc
 
 # --- franjas horarias (hora local) -----------------------------------------
+# Franjas en minutos desde medianoche (para poder cortar a y media).
 MEAL_SLOTS: tuple[tuple[int, int, str], ...] = (
-    (5, 10, "desayuno"),
-    (10, 15, "comida"),
-    (15, 17, "merienda"),
-    (17, 22, "cena"),
-    (22, 24, "snack"),
-    (0, 5, "snack"),
+    (5 * 60, 10 * 60, "desayuno"),
+    (10 * 60, 12 * 60, "picuelo de manana"),
+    (12 * 60, 15 * 60 + 30, "comida"),
+    (15 * 60 + 30, 17 * 60 + 30, "merienda"),
+    (17 * 60 + 30, 20 * 60, "picuelo de tarde"),
+    (20 * 60, 23 * 60, "cena"),
+    (23 * 60, 24 * 60, "snack"),
+    (0, 5 * 60, "snack"),
 )
 
 SLOT_EMOJI = {
     "desayuno": "☕",
-    "comida": "🍽",
+    "picuelo de manana": "🥐",
+    "comida": "🍽️",
     "merienda": "🥨",
+    "picuelo de tarde": "🍎",
     "cena": "🌙",
-    "snack": "🍎",
+    "snack": "🥜",
 }
+
+# Los nombres que se muestran (con tildes) y los que se guardan.
+SLOT_LABELS = {
+    "desayuno": "Desayuno",
+    "picuelo de manana": "Picuelo de mañana",
+    "comida": "Comida",
+    "merienda": "Merienda",
+    "picuelo de tarde": "Picuelo de tarde",
+    "cena": "Cena",
+    "snack": "Snack",
+}
+
+SLOT_KEYS = tuple(SLOT_LABELS)
+
+
 
 
 def resolve_tz(name: str | None) -> tzinfo:
@@ -131,10 +151,12 @@ def local_hour(dt: datetime | None = None, tz: tzinfo = UTC) -> int:
 
 
 def meal_slot(dt: datetime | None = None, tz: tzinfo = UTC) -> str:
-    """Franja horaria del instante: desayuno, comida, merienda, cena o snack."""
-    hour = local_hour(dt, tz)
+    """Franja del instante: desayuno, picuelo de manana, comida, merienda,
+    picuelo de tarde, cena o snack."""
+    moment = to_utc(dt or datetime.now(UTC)).astimezone(tz)
+    minute = moment.hour * 60 + moment.minute
     for start, end, name in MEAL_SLOTS:
-        if start <= hour < end:
+        if start <= minute < end:
             return name
     return "snack"
 

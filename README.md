@@ -381,6 +381,8 @@ Telegram y en `set_my_commands`.
 | `/hoy` | Resumen del día: macros, lo que has ahorrado hoy y el estado del banco semanal |
 | `/semana` | El banco de ahorro: presupuesto, lo ahorrado, lo que falta y el margen por día |
 | `/objetivo [kcal]` | Fija tus propias calorías: el bot te dice qué significa en kg/semana |
+| `/dormir [23:30 - 07:15]` | Apunta cómo has dormido: el sueño manda sobre el hambre |
+| `3 magdalenas del mercadona` | Escribe el producto tal cual: si está en el catálogo, te calcula las kcal |
 | `/historial [días]` | Últimas comidas y media calórica (botones 7/30/90 días) |
 | `/peso [kg]` | Registra peso y muestra la tendencia (kg/semana) |
 | `/meta` | Progreso hacia el objetivo + ETA en semanas |
@@ -608,6 +610,55 @@ Detalles:
 > Ninguna fórmula de BMR es una medición: la precisión real está en ±10-20%.
 > La forma de acercarse es mirar la tendencia de peso, y eso es justo lo que
 > hace el bot con los datos que le das.
+
+### 🍽 Franjas, catálogo de productos y etiquetas
+
+**Franjas.** Cada foto (y cada registro manual) lleva su franja: desayuno,
+picuelo de mañana, comida, merienda, picuelo de tarde, cena o snack. El bot la
+deduce de la hora, y con el botón **🕐 ¿Qué comida es?** la corriges (queda
+guardada en la comida, no se vuelve a recalcular).
+
+**Catálogo de productos.** Escribe el producto como lo dirías: `3 magdalenas
+del mercadona`, `1 natilla del dia`, `2 yogures`. El bot busca en dos sitios:
+
+1. **Tus productos** (los que has dado de alta con su etiqueta): llevan el
+   peso de la porción, así que el cálculo es exacto.
+2. **La tabla de ingredientes** del proyecto (~170 alimentos con kcal y macros
+   por 100 g).
+
+Si no lo encuentra, te pide la etiqueta y **lo da de alta**: la próxima vez
+que lo nombres, sale al instante.
+
+**Etiquetas.** El botón **🏷️ Producto con etiqueta** (o el alta automática)
+pide una foto de la etiqueta nutricional y el peso. La IA transcribe los
+valores y **tú confirmas antes de que se guarde**:
+
+```
+450 kcal/100 g  ×  250 g  =  1.125 kcal
+```
+
+Si en la etiqueta no aparece el peso neto, el modelo lo estima a partir del
+envase y te dice que es una estimación (tú lo confirmas o lo corriges). Con
+el % de grasa, además, el cálculo del mantenimiento va por composición corporal
+(Katch-McArdle), que no depende del sexo.
+
+### 😴 El sueño
+
+El sueño manda sobre el hambre, y el bot lo tiene en cuenta:
+
+- **Dormir más, comer menos**: alargar el sueño 1,2 h bajó la ingesta unos
+  **270 kcal/día** en un ECA (*JAMA Intern Med* 2022). Dormir 7-8 h se asocia
+  a más éxito en las pérdidas de peso.
+- **Dormir poco, comer más**: dormir poco sube el gasto ~100 kcal/día pero
+  **la ingesta en más de 250 kcal/día** (*Nature Reviews Endocrinology*
+  2022). Y el exceso de comida al dormir poco tiene más que ver con el control
+  del impulso que con las hormonas del hambre.
+- **El horario también cuenta**: si te acuestas a las 02:30, el piqueo de la
+  madrugada es consecuencia del horario, no falta de voluntad. El bot te lo
+  dice con datos.
+
+Con `/dormir 23:30 - 07:15` el bot apunta la noche y, con dos semanas de
+registro, te dice si tu horario es regular y cuánto promedia.
 
 ### 🕒 El día del usuario
 
