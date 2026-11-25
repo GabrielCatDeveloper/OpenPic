@@ -392,7 +392,22 @@ class PublicBot:
             .post_init(self._post_init)
             .build()
         )
+        # Red de seguridad: si un boton edita un mensaje con el mismo texto,
+        # Telegram lanza BadRequest y el usuario ve un error.
+        self.app.add_error_handler(self._on_error)
         self._register_handlers()
+
+    async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Errores no controlados.
+
+        Telegram lanza BadRequest ("message is not modified") cuando se edita
+        un mensaje con el mismo texto. Es inocuo: se ignora. El resto se
+        registra.
+        """
+        error = context.error
+        if isinstance(error, BadRequest) and "not modified" in str(error).lower():
+            return
+        log.error("Error no controlado: %s", error, exc_info=error)
 
     # -- setup ------------------------------------------------------------
     async def _post_init(self, app: Application) -> None:
@@ -929,9 +944,10 @@ class PublicBot:
         # Solo se puede corregir un plato propio.
         meal = self.db.get_meal(user.id, meal_id)
         if not meal:
-            await query.edit_message_text("Ese plato no existe o no es tuyo.")
+            await self._safe_send(update, "Ese plato no existe o no es tuyo.")
             return
-        await query.edit_message_text(
+        await self._safe_send(
+            update,
             "✏️ ¿Cuántas calorías tiene de verdad el plato?\n"
             f"<i>Estimación del bot: {int(meal['calories'] or 0)} kcal. "
             "Escribe el número.</i>"
@@ -1235,7 +1251,8 @@ class PublicBot:
         if raw.isdigit():
             days = max(1, min(365, int(raw)))
         stats = self.users.history_stats(update.effective_user.id, days)
-        await query.edit_message_text(
+        await self._safe_send(
+            update,
             history_message(stats, self.users.tz),
             parse_mode=ParseMode.HTML,
             reply_markup=history_keyboard(),
@@ -1370,8 +1387,9 @@ class PublicBot:
         meal_id = int(query.data.split(":")[-1])
         user = update.effective_user
         ok = self.db.delete_meal(user.id, meal_id)
-        await query.edit_message_text(
-            "🗑 Plato borrado." if ok else "No he podido borrar ese plato."
+        await self._safe_send(
+            update,
+            "🗑 Plato borrado." if ok else "No he podido borrar ese plato.",
         )
 
     async def cmd_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
