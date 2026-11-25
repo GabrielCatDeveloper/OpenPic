@@ -311,7 +311,39 @@ def build_target(
 
     # --- El deficit se define por semana.
     rate = weekly_rate_kg if weekly_rate_kg is not None else RATES["moderate"]
-    if goal == "lose":
+
+    if daily_kcal_override:
+        # --- OBJETIVO MANUAL: manda lo que el usuario ha elegido.
+        # Se respeta su decision (dentro del suelo de seguridad) y se le
+        # explica lo que significa. El bot informa, no Decide.
+        chosen = int(daily_kcal_override)
+        daily = max(floor, chosen)
+        if daily != chosen:
+            notes.append(
+                f"He ajustado tu objetivo al minimo de {floor} kcal: por debajo "
+                "hay riesgo de deficit de nutrientes."
+            )
+        deficit = int(round(maintenance - daily))
+        weekly_goal = int(round(deficit * 7))
+        if chosen > maintenance:
+            notes.append(
+                f"Tu objetivo esta {chosen - maintenance} kcal por encima de tu "
+                "mantenimiento: con eso subes de peso."
+            )
+        else:
+            notes.append(
+                f"Objetivo manual: {daily} kcal. Son {abs(deficit)} kcal "
+                f"{'menos' if deficit > 0 else 'mas'} que tu mantenimiento "
+                f"({maintenance} kcal) -> ~{abs(weekly_goal) / 7 / 7700:.2f} kg/semana."
+            )
+            if maintenance and abs(deficit) > maintenance * 0.25:
+                notes.append(
+                    "Es un deficit superior al 25% de tu mantenimiento: puede "
+                    "frenar la perdida y es dificil de sostener. Con pausas a "
+                    "mantenimiento (comer a tu mantenimiento unos dias) se "
+                    "aguanta mejor."
+                )
+    elif goal == "lose":
         weekly_goal = int(round(rate * KCAL_PER_KG_FAT))
         max_weekly = int(round(maintenance * 7 * 0.25))
         if weekly_goal > max_weekly:
@@ -329,11 +361,6 @@ def build_target(
         weekly_goal = -int(round(GAIN_RATE * KCAL_PER_KG_FAT))
         daily = int(round(maintenance - weekly_goal / 7.0))
         deficit = int(round(maintenance - daily))
-    elif daily_kcal_override:
-        daily = int(daily_kcal_override)
-        deficit = int(round(maintenance - daily))
-        weekly_goal = int(round(deficit * 7))
-        notes.append("Usando tu objetivo manual de calorias.")
     else:
         daily = int(round(maintenance))
         deficit = 0

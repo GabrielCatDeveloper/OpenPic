@@ -498,6 +498,7 @@ class PublicBot:
         self.app.add_handler(CommandHandler("hoy", self.cmd_hoy))
         self.app.add_handler(CommandHandler("resumen", self.cmd_hoy))
         self.app.add_handler(CommandHandler("semana", self.cmd_semana))
+        self.app.add_handler(CommandHandler("objetivo", self.cmd_objetivo))
         self.app.add_handler(CommandHandler("historial", self.cmd_historial))
         self.app.add_handler(CommandHandler("peso", self.cmd_peso))
         self.app.add_handler(CommandHandler("meta", self.cmd_meta))
@@ -514,6 +515,7 @@ class PublicBot:
         self.app.add_handler(
             CallbackQueryHandler(self.cb_register_weight, pattern=r"^peso:registrar$")
         )
+        self.app.add_handler(CallbackQueryHandler(self.cb_objetivo, pattern=r"^objetivo:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_delete_meal, pattern=r"^borrar:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_correct, pattern=r"^corregir:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_retry, pattern=r"^reintentar:"))
@@ -1146,7 +1148,18 @@ class PublicBot:
             update,
             weekly_message(week),
             parse_mode=ParseMode.HTML,
-            reply_markup=main_menu(),
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "\U0001f3af Fijar mis kcal", callback_data="objetivo:menu"
+                        ),
+                        InlineKeyboardButton(
+                            "\u2b05\ufe0f Men\u00fa", callback_data="menu:resumen"
+                        ),
+                    ]
+                ]
+            ),
         )
 
     async def _send_foto_prompt(self, update: Update) -> None:
@@ -1222,6 +1235,230 @@ class PublicBot:
         if not await self._require_auth(update):
             return
         await self._send_week(update)
+
+    # -- objetivo manual de calorias ---------------------------------------
+    async def cmd_objetivo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """El usuario fija su propio objetivo diario de calorias.
+
+        El bot calcula y explica, pero no impone: solo se niega a bajar del
+        suelo de seguridad (1200/1500/1400), que es el unico limite con
+        respaldo clinico claro.
+        """
+        if not await self._require_auth(update):
+            return
+        if context.args:
+            await self._propose_target(update, context, " ".join(context.args))
+            return
+        await self._send_target_info(update)
+
+    async def _send_target_info(self, update: Update) -> None:
+        """Muestra el mantenimiento, lo que sugiere el bot y lo que has fijado."""
+        user = update.effective_user
+        profile = self.users.profile(user.id)
+        target = self.users.daily_target(user.id)
+        if not target:
+            await self._safe_send(
+                update,
+                "\u2699\ufe0f Completa tu perfil primero (<code>/perfil</code>).",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        manual = profile.get("daily_kcal_override")
+        lines = ["<b>\U0001f3af Tus calor\u00edas</b>"]
+        lines.append(
+            f"Mantenimiento: <b>{target.maintenance_kcal} kcal/d\u00eda</b> "
+            f"(BMR {target.bmr} \u00b7 TDEE {target.tdee})"
+        )
+        if manual:
+            lines.append(
+                f"Tu objetivo: <b>{int(manual)} kcal/d\u00eda</b> (lo has fijado t\u00fa)"
+            )
+            lines.append(
+                f"Eso son {abs(target.deficit_kcal)} kcal "
+                f"{'menos' if target.deficit_kcal > 0 else 'm\u00e1s'} que tu "
+                f"mantenimiento: ~{abs(target.weekly_goal_kcal) / 7 / 7700:.2f} kg/semana."
+            )
+        else:
+            lines.append(
+                f"Objetivo sugerido: <b>{target.daily_kcal} kcal/d\u00eda</b> "
+                "(un deficit de 500-750 kcal, el rango que recomiendan las gu\u00edas)"
+            )
+        lines.append(
+            "\n<i>Puedes fijar el que quieras: el bot te dir\u00e1 qu\u00e9 "
+            "significa en cada caso. El \u00fanico l\u00edmite es el suelo de "
+            f"seguridad ({target.floor_kcal} kcal).</i>"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "\U0001f3af Fijar mis kcal", callback_data="objetivo:menu"
+                )
+            ]
+        ]
+        if manual:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "\u21a9 Volver al autom\u00e1tico", callback_data="objetivo:auto"
+                    )
+                ]
+            )
+        buttons.append([InlineKeyboardButton("\u2b05\ufe0f Men\u00fa", callback_data="menu:resumen")])
+        await self._safe_send(
+            update, "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    async def _propose_target(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str
+    ) -> None:
+        """Valida lo que el usuario escribe y explica lo que significa."""
+        user = update.effective_user
+        profile = self.users.profile(user.id)
+        value = self._parse_number(update, raw)
+        if value is None or not (600 <= value <= 6000):
+            await self._safe_send(
+                update,
+                "No he entendido las calor\u00edas. Escribe un n\u00famero entre 600 y 6000 "
+                "(ej. <code>2200</code>).",
+                parse_mode=ParseMode.HTML,
+                reply_markup=ForceReply(),
+            )
+            return
+
+        chosen = int(round(value))
+        target = self.users.daily_target(user.id)
+        if not target:
+            await self._safe_send(
+                update,
+                "\u2699\ufe0f Completa tu perfil primero (<code>/perfil</code>).",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        floor = int(target.floor_kcal)
+        if chosen < floor:
+            await self._safe_send(
+                update,
+                f"\u26a0\ufe0f <b>No te dejo bajar de {floor} kcal/d\u00eda.</b>\n\n"
+                f"Ese es el suelo de seguridad que recomiendan las gu\u00edas cl\u00ednicas "
+                f"(Harvard Health, Alberta Health Services): por debajo hay riesgo de "
+                f"d\u00e9ficit de nutrientes y de problemas de ves\u00edcula.\n\n"
+                f"Si necesitas comer menos de {floor} kcal, hazlo con un profesional "
+                f"sanitario. Con {floor} kcal ya estar\u00edas haciendo un d\u00e9ficit grande.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("\u2b05\ufe0f Men\u00fa", callback_data="menu:resumen")]]
+                ),
+            )
+            return
+
+        deficit = target.maintenance_kcal - chosen
+        kg_week = abs(deficit) * 7 / 7700
+        if deficit > 0:
+            meaning = (
+                f"Eso son <b>{deficit} kcal menos</b> que tu mantenimiento "
+                f"({target.maintenance_kcal} kcal): unas <b>{kg_week:.2f} kg por semana</b>."
+            )
+        elif deficit < 0:
+            meaning = (
+                f"Eso son <b>{-deficit} kcal m\u00e1s</b> que tu mantenimiento: "
+                f"<b>subir\u00edas</b> de peso (~{kg_week:.2f} kg/semana)."
+            )
+        else:
+            meaning = (
+                "Eso es exactamente tu mantenimiento: <b>no cambiar\u00edas de peso</b>. "
+                "Es lo que se llama una pausa de dieta, y las pausas a mantenimiento "
+                "ayudan a que la perdida no se atasque."
+            )
+
+        warning = ""
+        if deficit > 0 and target.maintenance_kcal and deficit > target.maintenance_kcal * 0.25:
+            warning = (
+                "\n\n\u26a0\ufe0f <i>Ojo: es un d\u00e9ficit de m\u00e1s del 25% de tu "
+                "mantenimiento. Puede frenar la perda y es dif\u00edcil de sostener; las "
+                "pausas a mantenimiento ayudan.</i>"
+            )
+
+        context.user_data["pending_kcal"] = chosen
+        await self._safe_send(
+            update,
+            f"<b>\U0001f3af Fijar {chosen} kcal/d\u00eda</b>\n\n"
+            f"{meaning}{warning}\n\n"
+            "<i>\u00bfLo confirmas?</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            f"\u2705 S\u00ed, {chosen} kcal",
+                            callback_data=f"objetivo:si:{chosen}",
+                        ),
+                        InlineKeyboardButton(
+                            "\u274c Cancelar", callback_data="objetivo:no"
+                        ),
+                    ]
+                ]
+            ),
+        )
+
+    async def cb_objetivo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Confirma, cancela o borra el objetivo manual."""
+        query = update.callback_query
+        await query.answer()
+        action = query.data.split(":")[1] if ":" in query.data else ""
+        user = update.effective_user
+
+        if action == "menu":
+            await self._send_target_info(update)
+            return
+
+        if action == "no":
+            context.user_data.pop("pending_kcal", None)
+            await self._safe_send(
+                update,
+                "\U0001f44c Nada, dejo tu objetivo como estaba.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
+            return
+
+        if action == "auto":
+            self.users.update_profile(user.id, daily_kcal_override=None)
+            await self._safe_send(
+                update,
+                "\u2705 Vuelvo al objetivo autom\u00e1tico.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
+            return
+
+        if action == "si":
+            raw = query.data.split(":")[-1]
+            try:
+                chosen = int(raw)
+            except ValueError:
+                chosen = int(context.user_data.pop("pending_kcal", 0) or 0)
+            context.user_data.pop("pending_kcal", None)
+            if not chosen:
+                await self._safe_send(update, "No he guardado nada.", parse_mode=ParseMode.HTML)
+                return
+            self.users.update_profile(user.id, daily_kcal_override=chosen)
+            target = self.users.daily_target(user.id)
+            extra = ""
+            if target:
+                extra = (
+                    f"\n\nMantenimiento: {target.maintenance_kcal} kcal/d\u00eda\n"
+                    f"Tu objetivo: <b>{chosen} kcal/d\u00eda</b>\n"
+                    f"Eso es ~{abs(target.weekly_goal_kcal) / 7 / 7700:.2f} kg/semana."
+                )
+            await self._safe_send(
+                update,
+                f"\u2705 <b>Objetivo fijado: {chosen} kcal/d\u00eda</b>{extra}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
 
     async def cmd_historial(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._require_auth(update):
@@ -1676,6 +1913,9 @@ class PublicBot:
         )
         lines.append(f"Objetivo: {goal_label(profile.get('goal'))}")
         lines.append(f"Peso objetivo: {profile.get('target_weight_kg') or '-'} kg")
+        manual = profile.get("daily_kcal_override")
+        if manual:
+            lines.append(f"Calor\u00edas al d\u00eda: <b>{int(manual)} kcal</b> (fijadas por ti)")
         return "\n".join(lines) + "\n"
 
     async def _ask(

@@ -380,6 +380,7 @@ Telegram y en `set_my_commands`.
 | 📸 **foto** | Analiza el plato: calorías, macros, ingredientes, confianza |
 | `/hoy` | Resumen del día: macros, lo que has ahorrado hoy y el estado del banco semanal |
 | `/semana` | El banco de ahorro: presupuesto, lo ahorrado, lo que falta y el margen por día |
+| `/objetivo [kcal]` | Fija tus propias calorías: el bot te dice qué significa en kg/semana |
 | `/historial [días]` | Últimas comidas y media calórica (botones 7/30/90 días) |
 | `/peso [kg]` | Registra peso y muestra la tendencia (kg/semana) |
 | `/meta` | Progreso hacia el objetivo + ETA en semanas |
@@ -472,10 +473,43 @@ El factor de actividad es la variable que más pesa (cambiar de nivel mueve
 con tus pasos y tus sesiones: ~35 kcal por cada 1 000 pasos de diferencia y
 ~3% del BMR por sesión de diferencia.
 
+### Tu objetivo manda: el bot informa, no impone
+
+El bot **calcula y explica**, pero la decisión es tuya. Con `/objetivo` (o el
+botón 🎯 de «Mi semana») puedes fijar tus propias calorías:
+
+```
+/objetivo 2200
+→ Eso son 200 kcal menos que tu mantenimiento (2400): ~0,18 kg por semana.
+  ¿Lo confirmas?
+```
+
+El bot te dice siempre qué significa en calorías y en kg/semana, y **solo se
+niega a bajar del suelo de seguridad** (1200 mujer / 1500 hombre / 1400 resto).
+`/objetivo 0` (o el botón «Volver al automático») devuelve el control al
+cálculo automático.
+
+#### Qué dicen las fuentes
+
+| Recomendación | Fuente | Qué hace el bot |
+|---|---|---|
+| «La ingesta no debe bajar de 1.200 kcal (mujeres) o 1.500 (hombres) salvo supervisión» | Harvard Health, *Calorie counting made easy* | Suelo duro: por debajo no se pasa |
+| «Los pacientes que comen menos de 1.200 kcal/día pueden tener riesgo nutricional y necesitan suplementación y supervisión médica» | Alberta Health Services, *Nutrition Guideline: Adult Obesity Care* (2020) | Suelo duro + aviso explícito |
+| 1.200/1.500 (mujeres) y 1.500/1.800 (hombres) como rango de programa clínico supervisado | NHLBI (1998), AHA/ACC/TOS (2013), NICE NG246 (2025) | No son «objetivos», son barandillas de seguridad |
+| «Un déficit de 500–750 kcal sobre el baseline» (o 500–1.000) | Alberta Health Services; Harvard Health | Es lo que sugiere el bot por defecto |
+| La adaptación termogénica promedia ~120 kcal/día, con mucha variabilidad individual; se atenúa o desaparece tras estabilizar el peso | Müller 2013; revisión sistemática *Br J Nutr* 2022 (33 estudios, 2.528 personas) | De ahí que el bot calibre con tus datos reales y no solo con la fórmula |
+| Con 25% de restricción, el TDEE cae ~450 kcal/día a los 3 meses, parte por adaptación metabólica | CALERIE (Redman 2009, *PLOS One*) | De ahí que el déficit grande avise |
+| Pausas a mantenimiento: mismo resultado y **menos** caída de TDEE | MATADOR (Byrne 2017, *Int J Obes*); meta-análisis *Nutrition Reviews* 2024 (12 ECAs, 881 personas) | El modelo semanal con margen: puedes comer a mantenimiento unos días |
+| Flexible vs. rígido: sin diferencias significativas en pérdida ni en mantenimiento | *JISSN* 2021; *Int J Obes* 2020 (24 meses) | El banco semanal reparte: un día de más no rompe la semana |
+
+> «Los suelos son barandillas, no objetivos»: no escalan con el tamaño del
+> cuerpo. Por eso el bot nunca te *obliga* a un número, pero tampoco te deja
+> comiendo por debajo de lo seguro sin explicarte por qué.
+
 ### Salvaguardas
 
 - **Suelo de seguridad**: nunca por debajo de 1200 kcal (mujer) / 1500 (hombre) / 1400 (otro).
-- **Techo del déficit**: máximo 25% del mantenimiento semanal (un déficit mayor frena la pérdida y no se sostiene).
+- **Techo del déficit automático**: máximo 25% del mantenimiento semanal (un déficit mayor frena la pérdida y no se sostiene). Si lo eliges tú, se acepta con aviso.
 - **Macros**: proteína 1.8 g/kg al adelgazar, grasa 25–30% de las kcal, carbohidratos el resto.
 - **Tendencia de peso**: regresión lineal de los últimos 14 días → kg/semana, ETA y proyección a 4 semanas.
 - **Detección de meseta**: si la tendencia es ~0 durante más de una semana, avisa de los errores típicos

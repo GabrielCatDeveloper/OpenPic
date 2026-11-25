@@ -54,8 +54,10 @@ def target_line(target: EnergyTarget | None) -> str:
         mode = f"superavit {abs(target.deficit_kcal)} kcal"
     else:
         mode = "mantenimiento"
+    manual = " · fijado por ti" if target.source == "manual" else ""
     return (
-        f"Objetivo: <b>{target.daily_kcal} kcal</b> "
+        f"Objetivo: <b>{target.daily_kcal} kcal</b>"
+        f"{manual} "
         f"(mantenimiento {target.maintenance_kcal} · BMR {target.bmr} · {mode})"
     )
 
