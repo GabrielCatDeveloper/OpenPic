@@ -58,6 +58,7 @@ from foodbot.core.nutrition import (
 from foodbot.core.privacy import PhotoStore, erase_user_data, storage_report
 from foodbot.core.advice import specific_tips
 from foodbot.core.feedback import meal_feedback
+from foodbot.core.mealplan import build_meal_plan
 from foodbot.core.label import (
     LABEL_PROMPT,
     LABEL_SYSTEM,
@@ -80,6 +81,8 @@ from foodbot.core.text import (
     esc,
     goal_label,
     history_message,
+    meal_plan_details,
+    meal_plan_message,
     privacy_message,
     progress_bar,
     progress_message,
@@ -88,7 +91,7 @@ from foodbot.core.text import (
     week_line,
     weekly_message,
 )
-from foodbot.core.timeutil import format_local_date
+from foodbot.core.timeutil import format_local_date, local_now
 from foodbot.core.tokens import TokenService
 from foodbot.core.users import SEXES, UserService
 
@@ -2513,7 +2516,7 @@ class PublicBot:
             )
 
         # Cache por dia: si ya se genero un plan para lo que has comido, no se
-        # vuelve a gastar GPU en la misma pregunta.
+        # vuelve a generar (tampoco se gasta GPU: el plan lo hacen las reglas).
         cache_key = f"plan:{user.id}:{summary['day']}:{eaten}:{daily_allowance}"
         cached = self.db.get_cache(cache_key)
         remaining = summary.get("remaining")
@@ -2526,27 +2529,39 @@ class PublicBot:
             + "\n\n"
         )
         if cached:
-            await update.effective_message.reply_text(
-                header + esc(cached.strip()), parse_mode=ParseMode.HTML
+            await self._safe_send(
+                update,
+                header + esc(cached.strip()),
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
             )
             return
 
-        status = await update.effective_message.reply_text("🧭 Preparando tu plan…")
-        try:
-            text = await self.llm.make_plan(
-                profile=self.users.describe_profile(profile),
-                kcal=int(daily_allowance),
-                protein=target.macro.protein_g,
-                carbs=target.macro.carbs_g,
-                fat=target.macro.fat_g,
-                eaten=eaten,
-                week=week_context,
-            )
-        except InferenceError as exc:
-            await status.edit_text(f"❌ No he podido generar el plan: {esc(str(exc)[:200])}")
-            return
-        self.db.set_cache(cache_key, text.strip(), user_id=user.id)
-        await status.edit_text(header + esc(text.strip()), parse_mode=ParseMode.HTML)
+        # El plan lo hacen las reglas: los numeros salen de la tabla de
+        # ingredientes y del margen semanal, no del modelo (que devuelve 15
+        # lineas en vez de 2 y tarda minutos).
+        now = local_now(self.users.tz)
+        plan = build_meal_plan(
+            target_kcal=int(daily_allowance),
+            protein_g=target.macro.protein_g,
+            carbs_g=target.macro.carbs_g,
+            fat_g=target.macro.fat_g,
+            now_hour=now.hour + now.minute / 60.0,
+            eaten_today=int(eaten),
+            floor_kcal=int(target.floor_kcal),
+            seed=f"{user.id}|{summary['day']}",
+        )
+        text = meal_plan_message(plan)
+        details = meal_plan_details(plan)
+        if details:
+            text = f"{text}\n\n{details}"
+        self.db.set_cache(cache_key, text, user_id=user.id)
+        await self._safe_send(
+            update,
+            header + esc(text),
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
+        )
 
     async def cmd_advice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._require_auth(update):

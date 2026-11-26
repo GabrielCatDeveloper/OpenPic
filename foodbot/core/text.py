@@ -243,6 +243,37 @@ def advice_message(specific: list[str], model_text: str = "") -> str:
     return "\n".join(lines)
 
 
+def meal_plan_message(plan: list[dict[str, Any]]) -> str:
+    """El plan en el formato que se pidio siempre:
+    '- COMIDA: plato | 480 kcal | P 32 g | C 45 g | G 18 g'
+    """
+    if not plan:
+        return "<i>Hoy ya has cubierto tu objetivo: no hace falta plan.</i>"
+    lines = []
+    for dish in plan:
+        lines.append(
+            f"- COMIDA: {esc(str(dish.get('name') or 'Plato'))} | "
+            f"{int(dish.get('kcal') or 0)} kcal | "
+            f"P {float(dish.get('protein_g') or 0):.0f} g | "
+            f"C {float(dish.get('carbs_g') or 0):.0f} g | "
+            f"G {float(dish.get('fat_g') or 0):.0f} g"
+        )
+    return "\n".join(lines)
+
+
+def meal_plan_details(plan: list[dict[str, Any]]) -> str:
+    """El detalle de cada plato (para quien lo quiera ver)."""
+    if not plan:
+        return ""
+    lines = []
+    for dish in plan:
+        items = ", ".join(
+            f"{item['name']} {int(item['grams'])} g" for item in dish.get("items", [])
+        )
+        lines.append(f"<i>{esc(items)}</i>")
+    return "\n".join(lines)
+
+
 def weekly_message(summary: dict[str, Any]) -> str:
     """Mensaje completo de la semana: presupuesto, margen y dia a dia."""
     target = summary.get("target")

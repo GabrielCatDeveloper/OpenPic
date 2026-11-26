@@ -395,9 +395,14 @@ def test_the_plan_is_cached_and_the_model_is_not_called_twice(bot):
         return (first, second)
 
     first, second = run(scenario)
-    assert calls["n"] == 1
+    # El plan lo generan las reglas (foodbot/core/mealplan.py): el modelo no
+    # se llama ni una vez, asi que tarda segundos y no se corta.
+    assert calls["n"] == 0
     assert "Plan para el resto del día" in first.everything
     assert "Plan para el resto del día" in second.everything
+    # El formato que se pide: "- COMIDA: plato | 480 kcal | P 32 g | C 45 g | G 18 g"
+    assert "COMIDA:" in first.everything
+    assert "kcal |" in first.everything
 
 
 def test_the_advice_is_cached(bot):
