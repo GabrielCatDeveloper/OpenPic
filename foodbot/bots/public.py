@@ -261,7 +261,7 @@ def main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🎯 Mi meta", callback_data="menu:meta"),
             ],
             [
-                InlineKeyboardButton("🍽 Registrar a mano", callback_data="menu:anotar"),
+                InlineKeyboardButton("🍽 Mis comidas", callback_data="menu:miscomidas"),
                 InlineKeyboardButton("⚙️ Mi perfil", callback_data="menu:perfil"),
             ],
             [
@@ -420,6 +420,7 @@ def job_keyboard() -> InlineKeyboardMarkup:
 # Botones del teclado persistente (la "app" del bot: no hay comandos).
 MENU_LABELS: dict[str, str] = {
     "📸 Analizar": "foto",
+    "🍽 Mis comidas": "miscomidas",
     "📊 Hoy": "resumen",
     "🗓 Semana": "semana",
     "⚖️ Peso": "peso",
@@ -437,13 +438,16 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
         [
             [
                 KeyboardButton("📸 Analizar"),
-                KeyboardButton("📊 Hoy"),
+                KeyboardButton("🍽 Mis comidas"),
             ],
             [
+                KeyboardButton("📊 Hoy"),
                 KeyboardButton("🗓 Semana"),
-                KeyboardButton("⚖️ Peso"),
             ],
-            [KeyboardButton("⚙️ Perfil")],
+            [
+                KeyboardButton("⚖️ Peso"),
+                KeyboardButton("⚙️ Perfil"),
+            ],
         ],
         resize_keyboard=True,
         input_field_placeholder="📸 Envía una foto de tu plato…",
@@ -723,6 +727,15 @@ class PublicBot:
         self.app.add_handler(CallbackQueryHandler(self.cb_objetivo, pattern=r"^objetivo:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_meal_slot, pattern=r"^slot:"))
         self.app.add_handler(CallbackQueryHandler(self.cb_product, pattern=r"^producto:"))
+        self.app.add_handler(CommandHandler("miscomidas", self.cmd_my_meals))
+        self.app.add_handler(
+            CallbackQueryHandler(
+                self.cb_my_meal, pattern=r"^mismeal:(usar|borrar|ayer|copiar|nueva|gestionar)"
+            )
+        )
+        self.app.add_handler(
+            CallbackQueryHandler(self.cb_save_my_meal, pattern=r"^mismeal:guardar:")
+        )
         self.app.add_handler(
             CallbackQueryHandler(self.cb_label_confirm, pattern=r"^etiqueta:(si|no)$")
         )
@@ -1046,7 +1059,27 @@ class PublicBot:
                 reply_markup=meal_actions_keyboard(meal_id),
             )
 
-            # --- 4b. EL STICKER: COMO VA EL DIA --------------------------
+            # --- 4b. GUARDAR EN MIS COMIDAS (para no volver a hacer foto) --
+            await self._safe_send(
+                update,
+                "\u2b50 \u00bfLa guardo en <b>Mis comidas</b> para la pr\u00f3xima vez?",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "\u2b50 Guardar en mis comidas",
+                                callback_data=f"mismeal:guardar:{meal_id}",
+                            ),
+                            InlineKeyboardButton(
+                                "\u2716 No", callback_data="mismeal:guardar:no"
+                            ),
+                        ]
+                    ]
+                ),
+            )
+
+            # --- 4c. EL STICKER: COMO VA EL DIA --------------------------
             # Sin reproches y siempre con la semana como contexto: un dia
             # tonto no es un desastre, el margen esta ahi.
             consumed_before = max(0, int(summary["calories"]) - int(analysis.calories))
@@ -1128,6 +1161,11 @@ class PublicBot:
             await self._menu_action(update, action)
             return
 
+        # 3b) ¿Esta guardando una comida nueva en la biblioteca?
+        if context.user_data.get("await_my_meal"):
+            await self.on_my_meal_text(update, context)
+            return
+
         # 4) ¿Es un producto del catalogo? ("3 magdalenas del mercadona")
         if self._authorized(update):
             request = parse_request(text)
@@ -1160,6 +1198,8 @@ class PublicBot:
         """Acciones del teclado persistente (los botones de abajo)."""
         if action == "foto":
             await self._send_foto_prompt(update)
+        elif action == "miscomidas":
+            await self._send_my_meals(update)
         elif action == "resumen":
             await self._send_today(update)
         elif action == "semana":
@@ -2233,6 +2273,366 @@ class PublicBot:
                 reply_markup=main_menu(),
             )
 
+    # -- biblioteca personal de comidas -------------------------------------
+    async def cmd_my_meals(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Tu biblioteca: lo que ya tienes medido, para apuntarlo sin foto."""
+        if not await self._require_auth(update):
+            return
+        await self._send_my_meals(update)
+
+    async def _send_my_meals(self, update: Update, manage: bool = False) -> None:
+        """La lista de tus comidas guardadas, agrupadas por franja."""
+        user = update.effective_user
+        from foodbot.core.timeutil import SLOT_ORDER
+
+        rows = [dict(row) for row in self.db.list_my_meals(user.id)]
+        # Las que mas usas, primero; dentro de cada franja, tambien.
+        rows.sort(
+            key=lambda r: (
+                SLOT_ORDER.index(r["slot"]) if r.get("slot") in SLOT_ORDER else 99,
+                -int(r.get("times_used") or 0),
+                str(r.get("name") or ""),
+            )
+        )
+        buttons: list[list[InlineKeyboardButton]] = []
+
+        if not rows:
+            await self._safe_send(
+                update,
+                "<b>🍽 Mis comidas</b>\n\n"
+                "Aqu\u00ed guardas lo que ya tienes medido (tu desayuno de "
+                "siempre, un batido, tu cena habitual) para apuntarlo en dos "
+                "toques, sin foto.\n\n"
+                "<i>Cuando apuntes una comida, pulsa <b>⭐ Guardar en mis "
+                "comidas</b> y la pr\u00f3xima vez estar\u00e1 aqu\u00ed.</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "➕ Añadir nueva", callback_data="mismeal:nueva"
+                            )
+                        ],
+                        [InlineKeyboardButton("⬅️ Menú", callback_data="menu:resumen")],
+                    ]
+                ),
+            )
+            return
+
+        if manage:
+            for row in rows:
+                buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            f"🗑 {row['name']} · {int(row['calories'] or 0)} kcal",
+                            callback_data=f"mismeal:borrar:{row['id']}",
+                        )
+                    ]
+                )
+            buttons.append(
+                [
+                    InlineKeyboardButton("✖ Volver", callback_data="menu:miscomidas"),
+                    InlineKeyboardButton("➕ Añadir", callback_data="mismeal:nueva"),
+                ]
+            )
+            await self._safe_send(
+                update,
+                "<b>🍽 Mis comidas</b>\n<i>Pulsa una para borrarla.</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        # Lo de ayer: el camino m\u00e1s r\u00e1pido para lo que se repite.
+        yesterday = self._yesterday_meals(user.id)
+        if yesterday:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "🔁 Lo de ayer", callback_data="mismeal:ayer"
+                    )
+                ]
+            )
+
+        current_slot = None
+        for row in rows:
+            slot = row.get("slot") or "otras"
+            if slot != current_slot:
+                from foodbot.core.timeutil import SLOT_LABELS
+
+                label = SLOT_LABELS.get(slot, "Otras")
+                buttons.append([InlineKeyboardButton(f"— {label} —", callback_data="mismeal:noop")])
+                current_slot = slot
+            used = int(row.get("times_used") or 0)
+            suffix = f" ({used}x)" if used else ""
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        f"{row['name']} · {int(row['calories'] or 0)} kcal{suffix}",
+                        callback_data=f"mismeal:usar:{row['id']}",
+                    )
+                ]
+            )
+
+        buttons.append(
+            [
+                InlineKeyboardButton("➕ Añadir nueva", callback_data="mismeal:nueva"),
+                InlineKeyboardButton("🗑 Gestionar", callback_data="mismeal:gestionar"),
+            ]
+        )
+        buttons.append([InlineKeyboardButton("⬅️ Menú", callback_data="menu:resumen")])
+
+        await self._safe_send(
+            update,
+            "<b>🍽 Mis comidas</b>\n"
+            "<i>Un toque para apuntar. Las que mas usas, primero.</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    def _yesterday_meals(self, user_id: int) -> list[dict[str, Any]]:
+        """Las comidas de ayer (para copiarlas de un toque)."""
+        from foodbot.core.timeutil import day_bounds, local_now
+
+        yesterday = (local_now(self.users.tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+        start, end, _ = day_bounds(yesterday, self.users.tz)
+        return [dict(row) for row in self.db.meals_between(user_id, start, end)]
+
+    async def cb_my_meal(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Apuntar una comida de la biblioteca (o gestionarla)."""
+        query = update.callback_query
+        await query.answer()
+        parts = query.data.split(":")
+        action = parts[1] if len(parts) > 1 else ""
+        user = update.effective_user
+
+        if action == "gestionar":
+            await self._send_my_meals(update, manage=True)
+            return
+
+        if action == "nueva":
+            context.user_data["await_my_meal"] = {"step": "name"}
+            await self._safe_send(
+                update,
+                "🍽 <b>¿Cómo se llama?</b>\n"
+                "<i>Ej: Avena con leche, Batido de proteina, Tortilla de la abuela.</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=ForceReply(),
+            )
+            return
+
+        if action == "borrar":
+            try:
+                meal_id = int(parts[2])
+            except (IndexError, ValueError):
+                return
+            row = self.db.get_my_meal(user.id, meal_id)
+            if row and self.db.delete_my_meal(user.id, meal_id):
+                await self._safe_send(
+                    update,
+                    f"🗑 Borrada <b>{esc(str(row['name']))}</b>.",
+                    parse_mode=ParseMode.HTML,
+                )
+            await self._send_my_meals(update, manage=True)
+            return
+
+        if action == "ayer":
+            meals = self._yesterday_meals(user.id)
+            if not meals:
+                await self._safe_send(
+                    update, "Ayer no registraste ninguna comida.", parse_mode=ParseMode.HTML
+                )
+                return
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        f"{m['dish']} · {int(m['calories'] or 0)} kcal",
+                        callback_data=f"mismeal:copiar:{m['id']}",
+                    )
+                ]
+                for m in meals[:10]
+            ]
+            buttons.append([InlineKeyboardButton("⬅️ Volver", callback_data="menu:miscomidas")])
+            await self._safe_send(
+                update,
+                "🔁 <b>Lo de ayer</b>\n<i>Pulsa una para copiarla.</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        if action == "usar":
+            try:
+                meal_id = int(parts[2])
+            except (IndexError, ValueError):
+                return
+            row = self.db.get_my_meal(user.id, meal_id)
+            if not row:
+                return
+            await self._log_saved_meal(update, dict(row))
+            return
+
+        if action == "copiar":
+            try:
+                meal_id = int(parts[2])
+            except (IndexError, ValueError):
+                return
+            meal = self.db.get_meal(user.id, meal_id)
+            if not meal:
+                return
+            await self._log_saved_meal(
+                update,
+                {
+                    "id": None,
+                    "name": meal["dish"],
+                    "calories": meal["calories"],
+                    "protein_g": meal["protein_g"],
+                    "carbs_g": meal["carbs_g"],
+                    "fat_g": meal["fat_g"],
+                    "slot": meal["meal_slot"],
+                },
+            )
+
+    async def _log_saved_meal(self, update: Update, row: dict[str, Any]) -> None:
+        """Apunta una comida de la biblioteca y da el feedback de siempre."""
+        user = update.effective_user
+        now = utcnow()
+        calories = int(row.get("calories") or 0)
+        summary = self.users.today_summary(user.id)
+        consumed_before = max(0, int(summary["calories"]))
+
+        self.db.add_meal(
+            user_id=user.id,
+            created_at=iso(now),
+            eaten_at=iso(now),
+            meal_slot=row.get("slot") or self._slot_for(now),
+            dish=str(row.get("name") or "Comida")[:120],
+            calories=calories,
+            protein_g=float(row.get("protein_g") or 0),
+            carbs_g=float(row.get("carbs_g") or 0),
+            fat_g=float(row.get("fat_g") or 0),
+            mass_g=0,
+            ingredients="[]",
+            raw_answer="",
+            confidence=1.0,
+            engine="biblioteca",
+        )
+        if row.get("id"):
+            self.db.use_my_meal(user.id, int(row["id"]))
+
+        await self._safe_send(
+            update,
+            f"✅ Anotado: <b>{esc(str(row.get('name') or 'Comida'))}</b> — "
+            f"{calories} kcal",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
+        )
+        feedback = self._feedback_for(user.id, calories, consumed_before)
+        await self._send_feedback(update.effective_message, feedback)
+
+    async def on_my_meal_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """El alta a mano de una comida (nombre -> kcal)."""
+        pending = context.user_data.get("await_my_meal") or {}
+        step = pending.get("step")
+        text = (update.effective_message.text or "").strip()
+
+        if step == "name":
+            if not text:
+                await update.effective_message.reply_text(
+                    "Necesito un nombre. Escribe el de la comida.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=ForceReply(),
+                )
+                return ConversationHandler.END
+            pending["name"] = text[:120]
+            pending["step"] = "kcal"
+            context.user_data["await_my_meal"] = pending
+            await update.effective_message.reply_text(
+                f"✅ <b>{esc(text[:120])}</b>\n¿Cuántas kcal tiene?\n"
+                "<i>Escribe solo el número (ej. <code>320</code>).</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=ForceReply(),
+            )
+            return ConversationHandler.END
+
+        if step == "kcal":
+            value = self._parse_number(update, text)
+            if value is None or not (0 <= value <= 5000):
+                await update.effective_message.reply_text(
+                    "No he entendido las calorías. Escribe un número "
+                    "(ej. <code>320</code>).",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=ForceReply(),
+                )
+                return ConversationHandler.END
+            user = update.effective_user
+            now = utcnow()
+            name = pending.get("name") or "Comida"
+            existing = self.db.find_my_meal(user.id, name)
+            if existing:
+                name = f"{name} ({int(existing['times_used'] or 0) + 2})"
+            self.db.add_my_meal(
+                user.id,
+                name=name,
+                slot=self._slot_for(now),
+                calories=int(value),
+            )
+            context.user_data.pop("await_my_meal", None)
+            await update.effective_message.reply_text(
+                f"✅ Guardada en <b>Mis comidas</b>: {esc(name)} — {int(value)} kcal",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🍽 Ver mis comidas", callback_data="menu:miscomidas")]]
+                ),
+            )
+            return ConversationHandler.END
+
+        return ConversationHandler.END
+
+    async def cb_save_my_meal(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Guarda la ultima comida en la biblioteca del usuario."""
+        query = update.callback_query
+        await query.answer()
+        parts = query.data.split(":")
+        user = update.effective_user
+        try:
+            meal_id = int(parts[2])
+        except (IndexError, ValueError):
+            return
+        if parts[2] == "no":
+            await self._safe_send(
+                update, "Vale, no la guardo.", parse_mode=ParseMode.HTML, reply_markup=main_menu()
+            )
+            return
+        meal = self.db.get_meal(user.id, meal_id)
+        if not meal:
+            return
+        name = str(meal["dish"] or "Comida")[:120]
+        existing = self.db.find_my_meal(user.id, name)
+        if existing:
+            # Variante: mismo nombre, otra version.
+            name = f"{name} ({int(existing['times_used'] or 0) + 2})"
+        self.db.add_my_meal(
+            user.id,
+            name=name,
+            slot=meal["meal_slot"],
+            calories=int(meal["calories"] or 0),
+            protein_g=meal["protein_g"],
+            carbs_g=meal["carbs_g"],
+            fat_g=meal["fat_g"],
+            photo_id=meal["photo_id"],
+        )
+        await self._safe_send(
+            update,
+            f"\u2b50 Guardada en <b>Mis comidas</b>: {esc(name)} "
+            f"({int(meal['calories'] or 0)} kcal).\n"
+            "<i>La pr\u00f3xima vez, un toque.</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("\U0001f37d Ver mis comidas", callback_data="menu:miscomidas")]]
+            ),
+        )
+
     # -- franja de la comida ------------------------------------------------
     async def cb_meal_slot(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Elegir (o corregir) a que franja pertenece la comida."""
@@ -3084,7 +3484,9 @@ class PublicBot:
             )
             return
 
-        if action == "resumen":
+        if action == "miscomidas":
+            await self._send_my_meals(update)
+        elif action == "resumen":
             await self._send_today(update)
         elif action == "semana":
             await self._send_week(update)

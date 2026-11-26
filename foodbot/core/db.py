@@ -170,6 +170,26 @@ CREATE TABLE IF NOT EXISTS products (
 );
 CREATE INDEX IF NOT EXISTS idx_products_user ON products(user_id, name);
 
+-- Biblioteca personal de comidas: lo que el usuario ya tiene medido (su
+-- desayuno de siempre, su batido, su cena habitual). Se registran en dos
+-- toques, sin foto: la foto es para lo que se acaba de cocinar.
+CREATE TABLE IF NOT EXISTS my_meals (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL,
+    name         TEXT    NOT NULL,
+    slot         TEXT,              -- desayuno | comida | merienda | cena...
+    calories     INTEGER NOT NULL,
+    protein_g    REAL,
+    carbs_g      REAL,
+    fat_g        REAL,
+    photo_id     TEXT,              -- foto de Telegram (para reutilizarla)
+    ingredients  TEXT,              -- json (por si hay que recalcular)
+    times_used   INTEGER NOT NULL DEFAULT 0,
+    last_used    TEXT,
+    created_at   TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_my_meals_user ON my_meals(user_id, slot, name);
+
 -- Como se ha dormido: la noche (hora de acostarse y de levantarse).
 CREATE TABLE IF NOT EXISTS sleep (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -433,6 +453,64 @@ class Database:
             "SELECT * FROM products WHERE (user_id = ? OR user_id IS NULL) "
             "AND name = ? LIMIT 1",
             (user_id, name.strip().lower()),
+        )
+
+    # -- biblioteca personal de comidas -------------------------------------
+    def add_my_meal(self, user_id: int, **fields: Any) -> int:
+        cur = self.execute(
+            "INSERT INTO my_meals "
+            "(user_id, name, slot, calories, protein_g, carbs_g, fat_g, photo_id, "
+            " ingredients, times_used, last_used, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)",
+            [
+                user_id,
+                str(fields.get("name") or "").strip()[:120],
+                fields.get("slot"),
+                int(fields.get("calories") or 0),
+                fields.get("protein_g"),
+                fields.get("carbs_g"),
+                fields.get("fat_g"),
+                fields.get("photo_id"),
+                fields.get("ingredients"),
+                iso(),
+            ],
+        )
+        return int(cur.lastrowid or 0)
+
+    def list_my_meals(self, user_id: int) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM my_meals WHERE user_id = ? "
+            "ORDER BY slot IS NULL, slot, times_used DESC, name",
+            (user_id,),
+        )
+
+    def get_my_meal(self, user_id: int, meal_id: int) -> sqlite3.Row | None:
+        return self.query_one(
+            "SELECT * FROM my_meals WHERE id = ? AND user_id = ?", (meal_id, user_id)
+        )
+
+    def find_my_meal(self, user_id: int, name: str) -> sqlite3.Row | None:
+        return self.query_one(
+            "SELECT * FROM my_meals WHERE user_id = ? AND name = ? LIMIT 1",
+            (user_id, name.strip().lower()),
+        )
+
+    def use_my_meal(self, user_id: int, meal_id: int) -> bool:
+        return (
+            self.execute(
+                "UPDATE my_meals SET times_used = times_used + 1, last_used = ? "
+                "WHERE id = ? AND user_id = ?",
+                (iso(), meal_id, user_id),
+            ).rowcount
+            > 0
+        )
+
+    def delete_my_meal(self, user_id: int, meal_id: int) -> bool:
+        return (
+            self.execute(
+                "DELETE FROM my_meals WHERE id = ? AND user_id = ?", (meal_id, user_id)
+            ).rowcount
+            > 0
         )
 
     # -- sueño ---------------------------------------------------------------

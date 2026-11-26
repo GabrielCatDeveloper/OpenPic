@@ -52,6 +52,17 @@ SLOT_LABELS = {
 
 SLOT_KEYS = tuple(SLOT_LABELS)
 
+# El orden del dia (no el alfabetico) para agrupar la biblioteca.
+SLOT_ORDER = (
+    "desayuno",
+    "picuelo de manana",
+    "comida",
+    "merienda",
+    "picuelo de tarde",
+    "cena",
+    "snack",
+)
+
 
 
 
