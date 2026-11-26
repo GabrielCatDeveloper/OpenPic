@@ -704,6 +704,12 @@ openPic/
 └── tests/                     # 189 tests + 11 de integración con el modelo real
 ```
 
+## 🗺️ Roadmap
+
+Lo que queda pendiente, lo que está a medias y los bugs conocidos están
+recogidos en **[docs/ROADMAP.md](docs/ROADMAP.md)**. Empieza por ahí para
+retomar el proyecto.
+
 ## 🧪 Tests
 
 ```bash
