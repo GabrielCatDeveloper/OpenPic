@@ -700,6 +700,7 @@ class PublicBot:
         self.app.add_handler(CommandHandler("semana", self.cmd_semana))
         self.app.add_handler(CommandHandler("objetivo", self.cmd_objetivo))
         self.app.add_handler(CommandHandler("dormir", self.cmd_sleep))
+        self.app.add_handler(CommandHandler("suave", self.cmd_gentle))
         self.app.add_handler(CommandHandler("historial", self.cmd_historial))
         self.app.add_handler(CommandHandler("peso", self.cmd_peso))
         self.app.add_handler(CommandHandler("meta", self.cmd_meta))
@@ -1523,9 +1524,11 @@ class PublicBot:
             lines.append(
                 f"Tu objetivo: <b>{int(manual)} kcal/d\u00eda</b> (lo has fijado t\u00fa)"
             )
+            # La palabra va fuera de la f-string: dentro de las llaves no
+            # puede haber barras invertidas (solo Python 3.12+ lo permite).
+            direction = "menos" if target.deficit_kcal > 0 else "m\u00e1s"
             lines.append(
-                f"Eso son {abs(target.deficit_kcal)} kcal "
-                f"{'menos' if target.deficit_kcal > 0 else 'm\u00e1s'} que tu "
+                f"Eso son {abs(target.deficit_kcal)} kcal {direction} que tu "
                 f"mantenimiento: ~{abs(target.weekly_goal_kcal) / 7 / KCAL_PER_KG_FAT:.2f} kg/semana."
             )
         else:
@@ -2199,6 +2202,33 @@ class PublicBot:
             parse_mode=ParseMode.HTML,
             reply_markup=main_menu(),
         )
+
+    async def cmd_gentle(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Activar o desactivar el modo suave (sin deficit ni cuentas).
+
+        Se puede cambiar cuando quieras: no hace falta pasar por el perfil.
+        """
+        if not await self._require_auth(update):
+            return
+        user = update.effective_user
+        profile = self.users.profile(user.id)
+        gentle = not bool(profile.get("gentle_mode"))
+        self.users.update_profile(user.id, gentle_mode=1 if gentle else 0)
+        if gentle:
+            await update.effective_message.reply_text(
+                "\U0001f91a <b>Modo suave activado.</b>\n\n"
+                "Sin deficit, sin cuentas y sin stickers que juzguen: solo se "
+                "guarda lo que comes. Lo puedes cambiar cuando quieras con "
+                "<code>/suave</code>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
+        else:
+            await update.effective_message.reply_text(
+                "Modo suave desactivado: vuelvo a calcularte el objetivo.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
 
     # -- franja de la comida ------------------------------------------------
     async def cb_meal_slot(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

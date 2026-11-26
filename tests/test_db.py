@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import timedelta
+
 from foodbot.core.db import Database, iso, utcnow
 
 
@@ -76,7 +78,9 @@ def test_update_meal_marks_the_meal_as_edited(db):
 
 
 def test_last_meal_is_the_most_recent_one(db):
-    old = iso(utcnow().replace(hour=1, minute=0, second=0))
+    # Ayer y ahora: si se usara "hoy a la 01:00" comomeal antiguo, el test
+    # fallaria entre las 00:00 y la 01:00 UTC (la "antigua" seria futura).
+    old = iso(utcnow() - timedelta(days=1))
     new = iso(utcnow())
     db.add_meal(user_id=1, created_at=old, eaten_at=old, dish="Viejo", calories=100)
     db.add_meal(user_id=1, created_at=new, eaten_at=new, dish="Nuevo", calories=200)
